@@ -1,0 +1,7 @@
+Trích xuất các quan hệ được nêu rõ trong văn bản tiếng Việt thành danh sách bộ ba [chủ thể, quan hệ, đối tượng]. Giữ nguyên tên riêng, số và ký hiệu toán học. Không suy đoán thông tin thiếu. Chỉ trả lại danh sách Python/JSON, không giải thích.
+
+Ví dụ:
+{few_shot_examples}
+
+Văn bản: {input_text}
+Bộ ba:

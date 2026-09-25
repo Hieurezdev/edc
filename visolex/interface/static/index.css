@@ -1,0 +1,592 @@
+/* Hide one of the sections initially */
+#dictionaryPage {
+    display: none;
+}
+
+h1 {
+    color: rgb(0, 0, 0);
+    text-align: center;
+}
+
+body {
+    background-attachment: fixed;
+    background: #EED5D1;
+    height: 100%;
+    background-size: cover;
+    background-position: center center;
+    font-family: Georgia, serif;
+    margin-right: 80px;
+    margin-left: 80px;
+
+}
+
+/* Add class for the toggle on state */
+body.toggle-on-bg {
+    background: #D3E4CD; /* Background color when toggle is ON */
+}
+
+.container {
+    display: flex;
+    justify-content: space-between;
+}
+
+.column {
+    width: 48%;
+}
+
+textarea {
+    width: 100%;
+    height: 150px;
+    font-size: 20pt;
+}
+
+button,
+select {
+    margin-top: 10px;
+    padding: 10px;
+    width: 100%;
+    text-align: center;
+    font-size: 10pt;
+}
+
+
+button {
+    margin-left: auto;
+    margin-right: auto;
+    background: #534859;
+    color: #E6E6E4;
+    display: block;
+    margin-top: 2%;
+    margin-bottom: 0%;
+    width: 50%;
+}
+
+.model-info {
+    border: 1px solid #ddd;
+    padding: 10px;
+    margin-top: 10px;
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    white-space: pre-wrap;
+    /* Preserves whitespace and line breaks */
+    font-family: monospace;
+    /* Gives a code-like appearance */
+    max-width: 800px;
+    margin: 50px auto;
+    display: none;
+    /* Hide by default */
+    text-align: center;
+}
+
+.info {
+    color: green;
+    font-weight: bold;
+    font-size: 20pt;
+    text-align: center;
+    max-width: 800px;
+}
+
+.error {
+    color: red;
+    font-weight: bold;
+    font-size: 20pt;
+    text-align: center;
+    max-width: 800px;
+}
+
+.visible {
+    display: block;
+    /* Show when needed */
+}
+
+.detection {
+    margin-top: 20px;
+    padding: 10px;
+}
+
+mark {
+    background-color: yellow;
+    color: black;
+}
+
+.result {
+    background: white;
+    margin-top: 10px;
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    border: 0 none;
+    width: 95%;
+    margin: 20px auto;
+    text-align: left;
+    position: relative;
+}
+
+.result h2.fs-title {
+    font-size: 24px;
+    color: #0a4d17;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    font-weight: bold;
+}
+
+#highlightedText {
+    font-size: 25px;
+    color: #333;
+    text-align: center;
+    line-height: 1.6;
+    word-wrap: break-word;
+}
+
+#detection_info {
+    width: 100%;
+    margin-top: 20px;
+    border-collapse: collapse;
+    background-color: #f9f9f9;
+    box-shadow: 0 0 15px 1px rgba(0, 0, 0, 0.1);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+#detection_info th, #detection_info td {
+    padding: 12px 15px;
+    text-align: center;
+    border-bottom: 1px solid #ddd;
+}
+
+#detection_info th {
+    background-color: #375b3c;
+    color: white;
+    text-transform: uppercase;
+    font-weight: bold;
+}
+
+#detection_info tr:hover {
+    background-color: #f1f1f1;
+}
+
+#detection_info td {
+    font-size: 16px;
+    color: #333;
+}
+
+#detection_info td:last-child {
+    text-align: center;
+}
+
+
+#switch{
+    top: 5%;
+    left: 85%;
+    width: 150px;
+    height: 40px;
+}
+
+.toggle{
+    position: absolute;
+    border: 2.5px solid #767676;
+    border-radius: 20px;
+    -webkit-transition: border-color .6s  ease-out;
+    transition: border-color .6s  ease-out;
+    box-sizing: border-box;
+}
+
+.toggle.toggle-on{
+    border-color: #383535;
+    -webkit-transition: all .5s .15s ease-out;
+    transition: all .5s .15s ease-out;
+}
+
+.toggle-button{
+    position: absolute;
+    top: 4px;
+    width: 28px;
+    bottom: 4px;
+    right: 110px;
+    background-color: #444249;
+    border-radius: 19px; 
+    cursor: pointer;
+    -webkit-transition: all .3s .1s, width .1s, top .1s, bottom .1s;
+    transition: all .3s .1s, width .1s, top .1s, bottom .1s;
+}
+
+.toggle-on .toggle-button{
+    top: 3px;
+    width: 30px;
+    bottom: 3px;
+    right: 3px;
+    border-radius: 23px;
+    background-color: #444249;
+    box-shadow: 0 0 16px #5b7561;
+    -webkit-transition: all .2s .1s, right .1s;
+    transition: all .2s .1s, right .1s;
+}
+
+
+.toggle-text-on{
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 23px;
+    line-height: 36px;
+    text-align: center;
+    font-family: 'Quicksand', sans-serif;
+    font-size: 15px;
+    font-weight: normal;
+    cursor: pointer;
+    color: rgba(0,0,0,0);
+}
+
+.toggle-on .toggle-text-on{
+    color: #3b3b37;
+    font-weight: bold;
+    text-align: center;
+    -webkit-transition: color .3s .15s ;
+    transition: color .3s .15s ;
+}
+
+.toggle-text-off{
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 3px;
+    line-height: 36px;
+    text-align: center;
+    font-family: 'Quicksand', sans-serif;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+
+    color: #444249;
+}
+
+.toggle-on .toggle-text-off{
+    color: rgba(0,0,0,0);
+}
+
+/* used for streak effect */
+.glow-comp{
+    position: absolute;
+    opacity: 0;
+    top: 10px;
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    border-radius: 6px;
+    background-color: rgba(75, 122, 141, .1);
+    box-shadow: 0 0 12px rgba(75, 122, 141, .2);
+    -webkit-transition: opacity 4.5s 1s;
+    transition: opacity 4.5s 1s;
+}
+
+.toggle-on .glow-comp{
+    opacity: 1;
+    -webkit-transition: opacity 1s;
+    transition: opacity 1s;
+}
+
+
+/* form style */
+#msform{
+    width:80%;
+
+    margin:0px auto;
+    text-align:center;
+    position: fixed;
+}
+
+#msform fieldset {
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    /* Removed border:0 none, it's not needed since border-radius works */
+    box-shadow: 0 0 15px 1px rgba(0, 0, 0, 0.4);
+    
+    /* Removed the absolute position and fixed padding */
+    padding: 40px; /* Uniform padding to make it responsive */
+    margin: 20px auto; /* Centering the fieldset with some margin */
+    box-sizing: border-box;
+    width: 90%; /* Setting a percentage width for responsiveness */
+
+    /* Responsive for smaller screens */
+    max-width: 1000px; /*s Maximum width so it doesn't stretch too much on large screens */
+    min-width: 300px; /* Minimum width to prevent it from becoming too narrow */
+}
+
+#msform {
+    position: relative;
+    width: 100%; /* Ensure the form takes full width */
+    min-height: 100vh; /* Ensure the form covers at least the full viewport height */
+}
+
+fieldset {
+    min-height: 400px; /* Optional: You can set a minimum height to ensure a balanced look */
+}
+
+/* Stack the fieldsets naturally without overlapping */
+fieldset:not(:first-of-type) {
+    display: none; /* Hide non-active fieldsets for multi-step forms */
+}
+
+/* headings */
+.fs-title{
+    font-size:16px;
+    text-transform:uppercase;
+    color: #0a4d17;
+    margin-bottom:10px;
+}
+
+.fs-subtitle{
+    font-weight:normal;
+    font-size:14px;
+    color:#666;
+    margin-bottom:20px;
+}
+
+
+/* progress bar */
+#progressbar{
+    padding: 20px; /* Uniform padding to make it responsive */
+    margin: 20px auto; /* Centering the fieldset with some margin */
+    font-size:13px;
+    width: 90%; /* Setting a percentage width for responsiveness */
+
+    /* Responsive for smaller screens */
+    max-width: 1000px; /*s Maximum width so it doesn't stretch too much on large screens */
+    min-width: 300px;
+    overflow:hidden;
+    /* CSS counters to number the steps */
+    counter-reset:sothutu;
+}
+
+#progressbar li{
+    list-style-type:none;
+    color:rgb(23, 22, 22);
+    text-transform:uppercase;
+    font-size:14px;
+    width:33.33%;
+    float:left;
+    position:relative;
+}
+
+#progressbar li:before{
+    content:counter(sothutu);
+    counter-increment:sothutu;
+    width:20px;
+    line-height:20px;
+    font-size:13px;
+    background:#fff;
+    color:#333;
+    font-weight:bold;
+    border-radius:3px;
+    margin:0 auto 5px auto;
+    display:block;
+}
+
+/* progressbar connectors */
+#progressbar li:after{
+    content:'';
+    width:100%;
+    height:2px;
+    background:#fff;
+    position:absolute;
+    left:-50%;
+    top:9px;
+    z-index:-1; /* put it behind the numbers */
+}
+
+#progressbar li:first-child:after{
+    /*connector not needed before the first step*/
+    content:none;
+}
+
+/*marking active/completed steps green*/
+#progressbar li.active:before,#progressbar li.active:after{
+    background:green;
+    color:#fff;
+}
+
+/* Hide all except first fieldset */
+#msform fieldset:not(:first-of-type){
+    display:none;
+}
+
+
+/* buttons */
+#msform .action-button{
+    width:100px;
+    background: #27AE60;
+    font-weight: bold;
+    color: white;
+    border:0 none;
+    border-radius:1px;
+    cursor:pointer;
+    padding:10px 5px;
+    margin:10px 5px;
+}
+
+#msform .action-button:hover,#msform .action-button:focus{
+    box-shadow:0 0 0 2px white,0 0 0 3px #27AE60;
+}
+
+@import url(
+"https://fonts.googleapis.com/css2?family=Pacifico&display=swap");
+@import url(
+"https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,200;0,400;0,600;0,800;1,300&display=swap");
+
+h2 {
+    text-align: center;
+    font-size: 3em;
+    color: #b36a3d;
+
+}
+
+.block {
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    /* Gives a code-like appearance */
+    box-shadow: 0 0 15px 1px rgba(0, 0, 0, 0.4);
+    padding: 10px; /* Adjust padding to provide consistent spacing */
+    padding-left: 5%;
+    padding-right: 5%;
+    margin: 50px auto; /* Center it horizontally and vertically */
+    max-width: 800px; /* Adjust the max-width to control block size */
+    min-height: 500px; /* Minimum height to ensure it doesn't collapse for short content */
+    text-align: left; /* Ensures proper alignment of text inside */
+    width: 80%; /* Block takes up 80% of the width of its parent */
+    box-sizing: border-box; /* Include padding and borders in width and height calculations */
+}
+
+.section1 {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.btn {
+    padding: 10px 10px;
+    padding-bottom: 6px;
+    line-height: 20px;
+    outline: none;
+    border: none;
+    background: #498040;
+    cursor: pointer;
+    color: white;
+    border-radius: 4px;
+    margin-left: 10px;
+    margin-top: 0px;
+    transition: all 0.4s;
+    height: 34.325px;
+}
+
+.btn i {
+    display: none;
+    margin-bottom: 6.5px;
+}
+
+.btn:hover {
+    background-color: #3e9031;
+}
+
+.inputValue {
+    line-height: 20px;
+    padding: 7px;
+    border: 1px solid #afabab;
+    border-radius: 4px;
+    width: 1000px;
+    outline: none;
+    font-size: 15px;
+}
+
+.section2 {
+    max-width: 550px;
+    width: calc(100%);
+    margin: auto;
+}
+
+.section3 {
+    max-width: 550px;
+    width: calc(100%);
+    margin: auto;
+}
+
+
+
+.section2 .value {
+    cursor: pointer;
+    text-align: left;
+    margin: 0;
+    padding: 0;
+    color: black;
+    text-decoration: underline;
+    font-size: 30px;
+    margin-top: 30px;
+}
+
+h4 {
+    color: #4DB33D;
+}
+
+.section2 p {
+    text-align: justify;
+}
+
+.section3 {
+    display: none; /* Đảm bảo phần này ẩn khi không cần thiết */
+    padding: 20px; /* Thêm khoảng cách bên trong */
+    border-radius: 5px; /* Bo tròn góc */
+    background-color: #f9f9f9; /* Màu nền nhẹ */
+    text-align: left;
+    font-family: Arial, sans-serif; /* Chọn phông chữ */
+}
+
+.section3 p.response {
+    font-size: 16px; /* Kích thước chữ */
+    color: #333; /* Màu chữ */
+    line-height: 1.6; /* Khoảng cách giữa các dòng */
+    text-align: left;
+}
+
+.section3 h1 {
+    font-size: 20px; /* Kích thước chữ cho tiêu đề */
+    color: #2c502c; /* Màu chữ tiêu đề */
+    margin-bottom: 5px; /* Khoảng cách dưới tiêu đề */
+    text-align: left;
+}
+
+.section3 h2 {
+    font-size: 18px; /* Kích thước chữ cho tiêu đề phụ */
+    color: #2bab28; /* Màu chữ tiêu đề phụ */
+    margin-top: 20px; /* Khoảng cách trên tiêu đề phụ */
+    text-align: left;
+}
+
+.section3 h3 {
+    font-size: 16px; /* Kích thước chữ cho tiêu đề cấp ba */
+    color: #47904e; /* Màu chữ tiêu đề cấp ba */
+    margin-top: 15px; /* Khoảng cách trên tiêu đề cấp ba */
+    text-align: left;
+}
+
+.section3 ul {
+    list-style-type: disc; /* Kiểu danh sách là dấu chấm */
+    padding-left: 20px; /* Thêm khoảng cách cho danh sách */
+    text-align: left;
+}
+
+.section3 li {
+    margin-bottom: 5px; /* Khoảng cách giữa các mục trong danh sách */
+    text-align: left;
+}
+
+.section3 strong {
+    font-weight: bold; /* Đậm chữ */
+}
+
+.section3 a {
+    color: #288f11; /* Màu cho liên kết */
+    text-decoration: none; /* Bỏ gạch chân */
+}
+
+.section3 a:hover {
+    text-decoration: underline; /* Gạch chân khi di chuột qua */
+}

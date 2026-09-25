@@ -1,0 +1,5 @@
+Văn bản: Tháp Eiffel tọa lạc tại Paris và được thiết kế bởi Gustave Eiffel.
+Bộ ba: [["Tháp Eiffel", "tọa lạc tại", "Paris"], ["Tháp Eiffel", "được thiết kế bởi", "Gustave Eiffel"]]
+
+Văn bản: Cung tròn có độ dài bằng bán kính thì có số đo 1 radian.
+Bộ ba: [["cung tròn có độ dài bằng bán kính", "có số đo", "1 radian"]]

@@ -1,0 +1,472 @@
+from argparse import Namespace
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+from clean_books import clean_books
+from edc.vietnamese_preprocess import clean_book_markdown, clean_vietnamese_text, correction_is_safe, split_text
+from edc.text_agent_pipeline import TextAgentWorkflow
+from edc.feedback_rules import derive_retry_rules, derive_rules
+from edc.text_generator import generate_candidate
+from edc.text_review import review_candidate
+from GraphJudge.graph_judger.verify_triples import parse_judgment
+from kg_pipeline import markdown_records, prepare_corpus, verify_graph
+
+
+class VietnamesePipelineTests(unittest.TestCase):
+    def test_book_cleanup_removes_image_markup_and_preserves_math(self):
+        original = (
+            "# Định lí\n![](images/a.png)\n"
+            "<details><summary>natural_image</summary>\nAn illustration\n</details>\n"
+            "<details><summary>text_image</summary>\nA ≤ B\n</details>\n"
+            "<table><tr><td>x</td><td>√2</td></tr></table>\n"
+            "$x < 5$ và a ≤ b, 2**3**2, H<sup>2</sup>O; &lt; vẫn là dấu so sánh. <iostream>\u200b\n"
+        )
+        cleaned = clean_book_markdown(original)
+        self.assertNotIn("\n\n", cleaned)
+        self.assertNotIn("![](", cleaned)
+        self.assertNotIn("<details>", cleaned)
+        self.assertNotIn("An illustration", cleaned)
+        self.assertNotIn("A ≤ B", cleaned)
+        self.assertIn("a ≤ b", cleaned)
+        self.assertIn("√2", cleaned)
+        self.assertIn("$x < 5$", cleaned)
+        self.assertIn("2**3**2", cleaned)
+        self.assertIn("H^{2}O", cleaned)
+        self.assertIn("<iostream>", cleaned)
+        self.assertNotIn("\u200b", cleaned)
+
+    def test_book_cleanup_writes_separate_folder(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "crawled_books"
+            source_dir.mkdir()
+            source = source_dir / "sach.md"
+            source.write_text("# Sách\n![](images/a.png)\n$2 + 2 = 4$\n", encoding="utf-8")
+            output_dir = root / "cleaned_books"
+            count, _, _ = clean_books(source_dir, output_dir)
+            self.assertEqual(count, 1)
+            self.assertIn("![](", source.read_text(encoding="utf-8"))
+            self.assertEqual((output_dir / "sach.md").read_text(encoding="utf-8"), "Sách\n$2 + 2 = 4$\n")
+
+    def test_book_cleanup_removes_numbered_figure_captions_only(self):
+        original = (
+            "Hình 1.1. Sơ đồ $x^2$\n"
+            "▲Hình 2.11: Mô hình\n"
+            "Hinh 3 Một số ví dụ\n"
+            "Hình 4\n"
+            "Hình 5.2,\n"
+            "Hinh 6.3a)\n"
+            "Hình 7.1 là biểu đồ của $y = x^2$.\n"
+            "\n"
+            "Quan sát Hình 1.1 và tính $x + 1$.\n"
+        )
+        cleaned = clean_book_markdown(original)
+        self.assertEqual(cleaned, "Hình 7.1 là biểu đồ của $y = x^2$.\n\nQuan sát Hình 1.1 và tính $x + 1$.\n")
+
+    def test_book_cleanup_closes_gaps_around_deleted_content(self):
+        original = "Đoạn một.\n\n![](figure.png)\n\nĐoạn hai.\n\nHình 1.1. Ảnh\n\nĐoạn ba.\n\nĐoạn bốn.\n"
+        self.assertEqual(
+            clean_book_markdown(original),
+            "Đoạn một.\nĐoạn hai.\nĐoạn ba.\n\nĐoạn bốn.\n",
+        )
+
+    def test_cleanup_preserves_formula_and_removes_image_markup(self):
+        raw = "Góc ở tâm chấn cung 1 rad. ![](images/a.jpg) <details>photo description</details> $2 \\pi   R$"
+        self.assertEqual(clean_vietnamese_text(raw), "Góc ở tâm chắn cung 1 rad. $2 \\pi   R$")
+        self.assertFalse(correction_is_safe("Góc 1 rad $2\\pi$", "Góc 2 rad $2\\pi$"))
+        self.assertFalse(correction_is_safe("Hà Nội là thủ đô.", "Paris là thủ đô."))
+        self.assertTrue(correction_is_safe("Một dieu kì lạ.", "Một điều kì lạ."))
+        self.assertEqual(parse_judgment("Yes, probably"), "UNSURE")
+
+    def test_split_keeps_formula_intact(self):
+        formula = "$" + "x + " * 40 + "1$"
+        parts = split_text("Mở đầu. " * 12 + formula + " Kết thúc.", 100)
+        self.assertEqual(sum(formula in part for part in parts), 1)
+
+    def test_markdown_books_keep_source_lines_and_remove_image_descriptions(self):
+        with TemporaryDirectory() as directory:
+            book = Path(directory) / "sach.md"
+            book.write_text(
+                "# Bài học\n\nHà Nội là thủ đô của Việt Nam.\n\n"
+                "![](images/a.jpg)\n<details>\n<summary>natural_image</summary>\nẢnh minh họa\n</details>\n\n"
+                "Paris là thủ đô của Pháp.\n",
+                encoding="utf-8",
+            )
+            records = list(markdown_records(Path(directory), 100))
+            self.assertEqual(len(records), 1)
+            self.assertIn("Hà Nội", records[0]["text"])
+            self.assertIn("Paris", records[0]["text"])
+            self.assertNotIn("Ảnh minh họa", records[0]["text"])
+            self.assertEqual(records[0]["metadata"]["source_file_name"], "sach.md")
+            self.assertEqual(records[0]["metadata"]["start_line"], 1)
+            self.assertEqual(records[0]["metadata"]["end_line"], 11)
+
+    def test_verification_preserves_alignment_and_filters_non_yes(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            prepared = [
+                {"id": "skip", "status": "skipped_empty_after_cleanup"},
+                {"id": "part", "source_id": "source", "source_line": 2,
+                 "metadata": {"doc_id": "doc_1"}, "clean_text": "Hà Nội là thủ đô Việt Nam.", "status": "ready"},
+            ]
+            (output / "prepared.jsonl").write_text(
+                "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in prepared), encoding="utf-8"
+            )
+            stage_path = output / "stage.json"
+            stage_path.write_text(json.dumps([{
+                "index": 0,
+                "input_text": "Hà Nội là thủ đô Việt Nam.\n",
+                "schema_canonicalizaiton": [
+                    ["Hà Nội", "là thủ đô của", "Việt Nam"],
+                    ["Hà Nội", "là thủ đô của", "Pháp"],
+                ]
+            }]), encoding="utf-8")
+            args = Namespace(api_base_url="http://localhost:5000/v1", judge_model=None, model="judge")
+            with patch("kg_pipeline.create_client"), patch(
+                "kg_pipeline.judge_triple", side_effect=[("YES", "YES"), ("NO", "NO")]
+            ):
+                verify_graph(args, output, stage_path)
+            with (output / "kg.jsonl").open(encoding="utf-8") as graph_file:
+                graph = [json.loads(line) for line in graph_file]
+            with (output / "triples.jsonl").open(encoding="utf-8") as triples_file:
+                triples = [json.loads(line) for line in triples_file]
+            self.assertEqual(graph[0]["id"], "part")
+            self.assertEqual([item["label"] for item in graph[0]["judgments"]], ["YES", "NO"])
+            self.assertEqual(len(triples), 1)
+            self.assertEqual(triples[0]["source_id"], "source")
+            self.assertEqual(triples[0]["triple"], ["Hà Nội", "là thủ đô của", "Việt Nam"])
+
+    def test_verification_accepts_answer_line_flattened_for_edc(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "prepared.jsonl").write_text(
+                json.dumps({
+                    "id": "mcq", "source_id": "book", "source_line": 1,
+                    "metadata": {}, "clean_text": "Câu hỏi?\nĐáp án: B\nGiải thích: Vì 2 + 2 = 4.", "status": "ready",
+                }, ensure_ascii=False) + "\n", encoding="utf-8",
+            )
+            stage = root / "stage.json"
+            stage.write_text(json.dumps([{
+                "index": 0, "input_text": "Câu hỏi? Đáp án: B Giải thích: Vì 2 + 2 = 4.\n",
+                "schema_canonicalizaiton": [],
+            }], ensure_ascii=False), encoding="utf-8")
+            args = Namespace(api_base_url="http://localhost:5000/v1", judge_model=None, model="judge")
+            with patch("kg_pipeline.create_client"):
+                verify_graph(args, root, stage)
+            self.assertEqual(json.loads((root / "kg.jsonl").read_text(encoding="utf-8"))["id"], "mcq")
+
+    def test_visolex_suggestions_preserve_source_until_contextual_correction(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.jsonl"
+            source.write_text(json.dumps({"id": "sample", "text": "Tôi khum biết."}, ensure_ascii=False) + "\n")
+            args = Namespace(
+                corpus=source, max_chars=1800, limit=0, correction_model=None,
+                api_base_url="http://localhost:5000/v1",
+                visolex_checkpoint=root / "checkpoint.pt", visolex_tokenizer="local-tokenizer",
+            )
+            suggestion = {"source": "khum", "replacement": "không", "confidence": 0.9999}
+            with patch("kg_pipeline.ViSoLexCorrector") as corrector:
+                corrector.return_value.suggest.return_value = ([suggestion], "suggested")
+                self.assertEqual(prepare_corpus(args, root), 1)
+            prepared = json.loads((root / "prepared.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(prepared["clean_text"], "Tôi khum biết.")
+            self.assertEqual(prepared["visolex_suggestions"], [suggestion])
+            self.assertEqual(prepared["visolex_status"], "suggested")
+
+    def test_contextual_correction_receives_visolex_suggestion(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.jsonl"
+            source.write_text(json.dumps({"id": "sample", "text": "Tôi khum biết."}, ensure_ascii=False) + "\n")
+            args = Namespace(
+                corpus=source, max_chars=1800, limit=0, correction_model="local-model",
+                api_base_url="http://localhost:5000/v1", visolex_checkpoint=root / "checkpoint.pt",
+                visolex_tokenizer="local-tokenizer",
+            )
+            suggestion = {"source": "khum", "replacement": "không", "confidence": 0.9999}
+            completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Tôi không biết."))])
+            with patch("kg_pipeline.ViSoLexCorrector") as corrector, patch("kg_pipeline.create_client") as create_client:
+                corrector.return_value.suggest.return_value = ([suggestion], "suggested")
+                create_client.return_value.chat.completions.create.return_value = completion
+                self.assertEqual(prepare_corpus(args, root), 1)
+                prompt = create_client.return_value.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+            prepared = json.loads((root / "prepared.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(prepared["clean_text"], "Tôi không biết.")
+            self.assertEqual(prepared["correction_status"], "accepted")
+            self.assertIn('"source": "khum"', prompt)
+
+    def test_text_agents_retry_with_feedback_and_persist_cheatsheet(self):
+        with TemporaryDirectory() as directory:
+            cheatsheet = Path(directory) / "cheatsheet.json"
+            source = "Bài toán có $x^2 = 4$."
+            candidates = [
+                {"action": "rewrite", "text": "Bài toán có x² = 4.", "answer": None, "reason": "Sửa định dạng"},
+                {"action": "keep", "text": source, "answer": None, "reason": "Giữ công thức"},
+            ]
+            passed = [{"check": name, "passed": True, "feedback": ""} for name in (
+                "semantics", "terminology", "solution", "removal",
+            )]
+            failed = [{"check": "semantics", "passed": False, "feedback": "Restore the original LaTeX formula"}, *passed[1:]]
+            rule = {"category": "math", "rule": "Giữ nguyên công thức LaTeX.", "evidence": "Bản được duyệt giữ công thức."}
+            with patch("edc.text_agent_pipeline.generate_candidate", side_effect=candidates) as generate, patch(
+                "edc.text_agent_pipeline.review_candidate", side_effect=[failed, passed]
+            ), patch("edc.text_agent_pipeline.derive_retry_rules", return_value=["Giữ nguyên công thức LaTeX."]) as retry, patch(
+                "edc.text_agent_pipeline.derive_rules", return_value=[rule]
+            ) as derive:
+                workflow = TextAgentWorkflow(object(), "writer", "checker", "rule-agent", cheatsheet, 2)
+                result = workflow.process("book::1", source, [])
+            self.assertEqual(result["status"], "accepted")
+            self.assertEqual(result["text"], source)
+            self.assertEqual(generate.call_args_list[0].args[4], [])
+            self.assertEqual(generate.call_args_list[1].args[4], ["Giữ nguyên công thức LaTeX."])
+            self.assertEqual(retry.call_args.args[3], candidates[0])
+            entries = json.loads(cheatsheet.read_text(encoding="utf-8"))["entries"]
+            self.assertEqual([entry["accepted"] for entry in entries], [False, True])
+            self.assertEqual(entries[0]["record_id"], "book::1")
+            self.assertEqual(entries[0]["retry_rules"], ["Giữ nguyên công thức LaTeX."])
+            reloaded = TextAgentWorkflow(object(), "writer", "checker", "rule-agent", cheatsheet, 2)
+            self.assertEqual(len(reloaded.entries), 2)
+            self.assertEqual(reloaded.rules[0]["rule"], rule["rule"])
+            self.assertEqual(derive.call_args.args[3], result["history"][:-1])
+            with patch("edc.text_agent_pipeline.generate_candidate", return_value=candidates[1]) as regenerate, patch(
+                "edc.text_agent_pipeline.review_candidate", return_value=passed,
+            ):
+                reloaded.process("book::2", source, [])
+            self.assertEqual(regenerate.call_args.args[4], [rule["rule"]])
+
+    def test_text_agents_append_feedback_log_for_large_book_runs(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = "Một đoạn sách."
+            candidate = {"action": "keep", "text": source, "answer": None, "explanation": None, "reason": "Đúng"}
+            checks = [{"check": name, "passed": True, "feedback": ""} for name in (
+                "semantics", "terminology", "solution", "removal",
+            )]
+            with patch("edc.text_agent_pipeline.generate_candidate", return_value=candidate), patch(
+                "edc.text_agent_pipeline.review_candidate", return_value=checks,
+            ):
+                workflow = TextAgentWorkflow(
+                    object(), "writer", "checker", "rule-agent",
+                    root / "cheatsheet.json", 2, root / "feedback.jsonl",
+                )
+                workflow.process("book::1", source, [])
+            cheat = json.loads((root / "cheatsheet.json").read_text(encoding="utf-8"))
+            self.assertEqual(cheat["entries"], [])
+            self.assertEqual(cheat["rules"], [])
+            log = [json.loads(line) for line in (root / "feedback.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([entry["record_id"] for entry in log], ["book::1"])
+            reloaded = TextAgentWorkflow(
+                object(), "writer", "checker", "rule-agent",
+                root / "cheatsheet.json", 2, root / "feedback.jsonl",
+            )
+            self.assertEqual(reloaded.entries, [])
+
+    def test_generator_and_four_review_prompts_use_validated_json(self):
+        source = "Hà Nội là thủ đô Việt Nam."
+        responses = [json.dumps({"action": "keep", "text": source, "answer": None, "explanation": None, "reason": "Đúng"}, ensure_ascii=False)]
+        responses.extend(json.dumps({"passed": True, "feedback": ""}) for _ in range(4))
+        completions = Mock()
+        completions.create.side_effect = [
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+            for response in responses
+        ]
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        rule = {"category": "math", "rule": "Giữ nguyên LaTeX.", "evidence": "Một lỗi trước đó."}
+        candidate = generate_candidate(client, "writer", source, [], [rule["rule"]])
+        checks = review_candidate(client, "checker", source, candidate)
+        self.assertEqual([check["check"] for check in checks], ["semantics", "terminology", "solution", "removal"])
+        request = json.loads(completions.create.call_args_list[0].kwargs["messages"][1]["content"])
+        self.assertEqual(request["rules"], [rule["rule"]])
+        self.assertEqual(set(request), {"source_text", "visolex_suggestions", "rules"})
+        prompts = [call.kwargs["messages"][0]["content"] for call in completions.create.call_args_list]
+        self.assertEqual(len(set(prompts)), 5)
+
+    def test_generator_places_supported_answer_and_short_explanation_on_separate_lines(self):
+        source = "2 + 2 = ? A. 3 B. 4 C. 5 D. 6"
+        response = json.dumps({
+            "action": "rewrite", "text": source, "answer": "B",
+            "explanation": "Vì 2 + 2 = 4, tương ứng phương án B.", "reason": "Thêm đáp án đã kiểm tra",
+        }, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        candidate = generate_candidate(client, "writer", source, [], [])
+        self.assertEqual(candidate["text"], source + "\nĐáp án: B\nGiải thích: Vì 2 + 2 = 4, tương ứng phương án B.")
+
+    def test_generator_rejects_answer_without_explanation(self):
+        source = "2 + 2 = ? A. 3 B. 4"
+        response = json.dumps({
+            "action": "rewrite", "text": source, "answer": "B", "explanation": None,
+            "reason": "2 + 2 = 4",
+        }, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        with self.assertRaisesRegex(ValueError, "explanation"):
+            generate_candidate(client, "writer", source, [], [])
+
+    def test_generator_does_not_duplicate_existing_answer_and_explanation_lines(self):
+        source = "2 + 2 = ? A. 3 B. 4"
+        explanation = "Vì 2 + 2 = 4."
+        expected = source + "\nĐáp án: B\nGiải thích: " + explanation
+        response = json.dumps({
+            "action": "rewrite", "text": expected, "answer": "B",
+            "explanation": explanation, "reason": "Đã tính lại",
+        }, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        candidate = generate_candidate(client, "writer", source, [], [])
+        self.assertEqual(candidate["text"], expected)
+
+    def test_generator_uses_structured_explanation_when_text_differs(self):
+        source = "2 + 2 = ? A. 3 B. 4"
+        response = json.dumps({
+            "action": "rewrite", "text": source + "\nĐáp án: B\nGiải thích: Tổng bằng bốn.",
+            "answer": "B", "explanation": "Vì 2 + 2 = 4.", "reason": "Đã tính lại",
+        }, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        candidate = generate_candidate(client, "writer", source, [], [])
+        self.assertEqual(candidate["text"], source + "\nĐáp án: B\nGiải thích: Vì 2 + 2 = 4.")
+
+    def test_rule_agent_keeps_only_rules_about_confirmed_feedback(self):
+        source = "Có công thức $x^2$."
+        rejected = [{
+            "accepted": False,
+            "candidate": {"action": "rewrite", "text": "Có công thức x².", "answer": None, "reason": "Đổi dạng"},
+            "checks": [{"check": "protected_math", "passed": False, "feedback": "Restore $x^2$"}],
+        }]
+        accepted = {"action": "keep", "text": source, "answer": None, "reason": "Giữ công thức"}
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock()))
+        rules = derive_rules(client, "rule-agent", source, rejected, accepted, [])
+        self.assertEqual([rule["category"] for rule in rules], ["math"])
+        self.assertIn("LaTeX", rules[0]["rule"])
+        client.chat.completions.create.assert_not_called()
+
+    def test_retry_rule_agent_restores_missing_latex_without_raw_feedback_to_writer(self):
+        source = "Có công thức $x^2$."
+        candidate = {"action": "rewrite", "text": "Có công thức x².", "answer": None}
+        checks = [{"check": "protected_math", "passed": False, "feedback": "Restore $x^2$"}]
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock()))
+        rules = derive_retry_rules(client, "rule-agent", source, candidate, checks, [])
+        self.assertEqual(len(rules), 1)
+        self.assertIn("LaTeX", rules[0])
+        client.chat.completions.create.assert_not_called()
+
+    def test_retry_rule_agent_discards_instruction_to_remove_answer(self):
+        source = "2 + 2 = ? A. 3 B. 4"
+        candidate = {"action": "rewrite", "text": source + "\nĐáp án: B", "answer": "B"}
+        checks = [{"check": "semantics", "passed": False, "feedback": "Remove the answer"}]
+        response = json.dumps({"rules": [{
+            "category": "semantics", "rule": "Xóa dòng đáp án.",
+            "evidence": "Reviewer yêu cầu xóa đáp án.",
+        }]}, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        self.assertEqual(derive_retry_rules(client, "rule-agent", source, candidate, checks, []), [])
+
+    def test_retry_rule_agent_converts_current_feedback_to_one_rule(self):
+        source = "khí hiếm Ne"
+        candidate = {"action": "rewrite", "text": "khí hiểm Ne", "answer": None}
+        checks = [{"check": "terminology", "passed": False, "feedback": "Giữ thuật ngữ khí hiếm."}]
+        response = json.dumps({"rules": [{
+            "category": "terminology", "rule": "Giữ thuật ngữ khí hiếm khi sửa OCR.",
+            "evidence": "Nguồn có khí hiếm; bản nháp đổi thành khí hiểm.",
+        }]}, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        rules = derive_retry_rules(client, "rule-agent", source, candidate, checks, [])
+        self.assertEqual(rules, ["Giữ thuật ngữ khí hiếm khi sửa OCR."])
+        request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual(request["failed_checks"], [{"check": "terminology", "feedback": "Giữ thuật ngữ khí hiếm."}])
+
+    def test_rule_agent_discards_categories_not_in_failed_checks(self):
+        source = "khí hiểm Ne"
+        rejected = [{
+            "accepted": False,
+            "candidate": {"action": "rewrite", "text": "khí nguy hiểm Ne", "answer": None, "reason": "Sửa thuật ngữ"},
+            "checks": [{"check": "terminology", "passed": False, "feedback": "Use khí hiếm"}],
+        }]
+        accepted = {"action": "rewrite", "text": "khí hiếm Ne", "answer": None, "reason": "Sửa OCR"}
+        response = json.dumps({"rules": [
+            {"category": "terminology", "rule": "Dựa vào ngữ cảnh để sửa thuật ngữ OCR.", "evidence": "Bản cuối dùng khí hiếm."},
+            {"category": "removal", "rule": "Bỏ tiêu đề ở cuối đoạn.", "evidence": "Một tiêu đề bị bỏ."},
+        ]}, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        rules = derive_rules(client, "rule-agent", source, rejected, accepted, [])
+        self.assertEqual([rule["category"] for rule in rules], ["terminology"])
+        request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual(request["allowed_categories"], ["spelling", "terminology"])
+
+    def test_rule_agent_does_not_learn_to_delete_accepted_answer(self):
+        source = "2 + 2 = ? A. 3 B. 4"
+        rejected = [{
+            "accepted": False,
+            "candidate": {"action": "rewrite", "text": source, "answer": None, "reason": "Chưa trả lời"},
+            "checks": [{"check": "semantics", "passed": False, "feedback": "Remove the answer"}],
+        }]
+        accepted = {"action": "rewrite", "text": source + "\nĐáp án: B", "answer": "B", "reason": "2 + 2 = 4"}
+        response = json.dumps({"rules": [
+            {"category": "semantics", "rule": "Xóa dòng đáp án sau câu hỏi.", "evidence": "Reviewer từng yêu cầu."},
+        ]}, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        self.assertEqual(derive_rules(client, "rule-agent", source, rejected, accepted, []), [])
+
+    def test_text_agent_drop_is_excluded_from_edc_input(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.jsonl"
+            source.write_text(json.dumps({"id": "noise", "text": "zzx ### qqq"}) + "\n", encoding="utf-8")
+            args = Namespace(
+                corpus=source, max_chars=1800, limit=0, correction_model=None,
+                text_agent_model="writer", review_model="checker", agent_rounds=2,
+                cheatsheet_path=None, api_base_url="http://localhost:5000/v1",
+                visolex_checkpoint=None, visolex_tokenizer="unused",
+            )
+            with patch("kg_pipeline.create_client"), patch(
+                "edc.text_agent_pipeline.generate_candidate",
+                return_value={"action": "drop", "text": "", "answer": None, "reason": "OCR vô nghĩa"},
+            ), patch("edc.text_agent_pipeline.review_candidate", return_value=[
+                {"check": name, "passed": True, "feedback": ""}
+                for name in ("semantics", "terminology", "solution", "removal")
+            ]):
+                self.assertEqual(prepare_corpus(args, root), 0)
+            prepared = json.loads((root / "prepared.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(prepared["status"], "skipped_dropped")
+            self.assertEqual((root / "edc_input.txt").read_text(encoding="utf-8"), "")
+            self.assertEqual(len(json.loads((root / "cheatsheet.json").read_text(encoding="utf-8"))["entries"]), 1)
+
+    def test_text_agent_rejection_never_reaches_edc(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.jsonl"
+            source.write_text(json.dumps({"id": "question", "text": "2 + 2 = ?"}) + "\n", encoding="utf-8")
+            args = Namespace(
+                corpus=source, max_chars=1800, limit=0, correction_model=None,
+                text_agent_model="writer", review_model="checker", agent_rounds=2,
+                cheatsheet_path=None, api_base_url="http://localhost:5000/v1",
+                visolex_checkpoint=None, visolex_tokenizer="unused",
+            )
+            with patch("kg_pipeline.create_client"), patch(
+                "edc.text_agent_pipeline.generate_candidate",
+                return_value={"action": "rewrite", "text": "2 + 2 = 5", "answer": None, "reason": "Sai"},
+            ), patch("edc.text_agent_pipeline.review_candidate", return_value=[
+                {"check": "semantics", "passed": False, "feedback": "Incorrect arithmetic"},
+                {"check": "terminology", "passed": True, "feedback": ""},
+                {"check": "solution", "passed": True, "feedback": ""},
+                {"check": "removal", "passed": True, "feedback": ""},
+            ]), patch("edc.text_agent_pipeline.derive_retry_rules", return_value=["Kiểm tra lại phép tính."]):
+                self.assertEqual(prepare_corpus(args, root), 0)
+            prepared = json.loads((root / "prepared.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(prepared["status"], "skipped_review_rejected")
+            self.assertEqual(len(prepared["agent_history"]), 2)
+            self.assertEqual((root / "edc_input.txt").read_text(encoding="utf-8"), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

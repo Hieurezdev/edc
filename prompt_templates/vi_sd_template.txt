@@ -1,0 +1,9 @@
+Với từng quan hệ xuất hiện trong các bộ ba, viết định nghĩa tiếng Việt ngắn gọn theo chiều chủ thể đến đối tượng. Mỗi dòng đúng định dạng "quan hệ: định nghĩa". Không viết nội dung khác.
+
+Ví dụ:
+{few_shot_examples}
+
+Văn bản: {text}
+Bộ ba: {triples}
+Quan hệ: {relations}
+Định nghĩa:

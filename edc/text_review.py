@@ -1,0 +1,80 @@
+"""Independent, prompt-based checks for Vietnamese book text revisions."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+
+
+_PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
+_REVIEW_PROMPTS = {
+    "semantics": "vi_review_semantics.txt",
+    "terminology": "vi_review_terminology.txt",
+    "solution": "vi_review_solution.txt",
+    "removal": "vi_review_removal.txt",
+}
+_ACTIONS = {"keep", "rewrite", "drop"}
+
+
+def review_candidate(
+    client: OpenAI, model: str, source_text: str, candidate: dict[str, object]
+) -> list[dict[str, object]]:
+    """Review one candidate through four separately prompted checks."""
+    if not isinstance(source_text, str) or not source_text.strip():
+        raise ValueError("Review source_text must be a nonempty string")
+    if not isinstance(candidate, dict):
+        raise ValueError("Review candidate must be an object")
+    action = candidate.get("action")
+    if not isinstance(action, str) or action not in _ACTIONS:
+        raise ValueError("Review candidate.action must be keep, rewrite, or drop")
+    if not isinstance(candidate.get("text"), str):
+        raise ValueError("Review candidate.text must be a string")
+    answer = candidate.get("answer")
+    if answer is not None and not isinstance(answer, str):
+        raise ValueError("Review candidate.answer must be a string or null")
+    explanation = candidate.get("explanation")
+    if explanation is not None and not isinstance(explanation, str):
+        raise ValueError("Review candidate.explanation must be a string or null")
+    if not isinstance(candidate.get("reason"), str):
+        raise ValueError("Review candidate.reason must be a string")
+
+    payload = json.dumps(
+        {"source_text": source_text, "candidate": candidate}, ensure_ascii=False
+    )
+    results: list[dict[str, object]] = []
+    for check, prompt_file in _REVIEW_PROMPTS.items():
+        prompt = (_PROMPT_DIR / prompt_file).read_text(encoding="utf-8")
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": payload},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        if not completion.choices:
+            raise ValueError(f"{check} reviewer returned no choices")
+        content = completion.choices[0].message.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"{check} reviewer returned an empty response")
+        try:
+            verdict = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{check} reviewer returned invalid JSON") from exc
+        if (
+            not isinstance(verdict, dict)
+            or set(verdict) != {"passed", "feedback"}
+            or not isinstance(verdict["passed"], bool)
+            or not isinstance(verdict["feedback"], str)
+            or (not verdict["passed"] and not verdict["feedback"].strip())
+        ):
+            raise ValueError(f"{check} reviewer returned an invalid verdict schema")
+        results.append(
+            {"check": check, "passed": verdict["passed"], "feedback": verdict["feedback"]}
+        )
+    return results

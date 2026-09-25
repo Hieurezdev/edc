@@ -99,3 +99,67 @@ You may use EDC on customized input and target schema by following the formats u
 ## Evaluation
 
 Please refer to `evaluate` folder and its README.
+
+## Vietnamese corpus pipeline (EDC + GraphJudge)
+
+`kg_pipeline.py` reads the Markdown books in `crawled_books/` by default, then runs EDC extraction and source-grounded GraphJudge verification. It groups paragraphs into bounded segments and keeps the source book, line range, and stable book ID with every result. The source books are never edited. A JSONL input remains available with `--input corpus.jsonl`.
+
+To create a separate, regex-cleaned copy of every book, run `python3 clean_books.py`. It writes matching filenames under `cleaned_books/`, removes Markdown image references, all `<details>` image descriptions, HTML tags, invisible/control characters, and numbered figure caption lines such as `Hình 1.1. ...`. References to figures in body text remain. Deleted content and adjacent blank lines leave no gaps; unaffected paragraph breaks are reduced to one blank line. LaTeX formulas and visible mathematical symbols in retained text are preserved. Source line numbers in the KG pipeline refer to these cleaned files. The command refuses to overwrite an existing output directory. Pass `--input cleaned_books` to use these files in the KG pipeline.
+
+The pipeline first normalizes Unicode and OCR/Markdown artifacts, removes image descriptions, preserves LaTeX, and records both the original and normalized text. Optional ViSoLex inference uses `checkpoints/student model/final_model.pt` and the local BARTpho tokenizer in `checkpoints/bartpho-tokenizer/` to produce spelling suggestions. ViSoLex was trained for social media and gives false positives on textbook terminology and dialect words, so its predictions are recorded but never substituted directly. When `--correction-model` is enabled, the correction model sees these suggestions and the source passage; its output is accepted only if formulas, numbers, capitalized words, and overall text similarity pass conservative checks. EDC then extracts and canonicalizes relations with Vietnamese prompts. The verifier labels each EDC triple `YES`, `NO`, or `UNSURE` against its source segment. Only `YES` triples enter `triples.jsonl`; all judgments remain in `kg.jsonl`.
+
+For reviewed textbook cleanup, enable `--text-agent-model` instead of `--correction-model`. The generator may correct OCR, add a supported multiple-choice answer followed by a short `Giải thích: ...` line, or propose dropping a wholly meaningless/worked-solution segment. Four independently prompted checks review meaning, dialect and technical vocabulary, answer/solution correctness, and whether removal is justified. Rejected proposals return to the generator for at most `--agent-rounds` attempts (default 3). A third agent converts failed checks into provisional rules for the next attempt and stores reusable rules only after a revised candidate passes review. The generator receives rule text only: confirmed rules from earlier segments and provisional rules for the current retry. Raw reviewer feedback and review history remain in the cheatsheet for audit, but are never sent to the generator. All verdicts and rules are saved in `cheatsheet.json`; use `--cheatsheet-path` to reuse it across runs. `--rule-model` can select a separate model for rule generation. Approved drops and proposals still rejected after the final attempt are marked in `prepared.jsonl` and excluded from EDC. Each proposed text and all feedback remain in `agent_history` for audit. This review is model-based and should be audited on a sample before processing every book.
+
+To produce reviewed Markdown books with the same relative names and folder layout as `cleaned_books/`, use `rewrite_books.py`. It groups source text into paragraph-aware chunks, processes chunks in sequential batches, and checkpoints each result under `output/reviewed_books_state/`. This state directory keeps confirmed rules in `cheatsheet.json`, individual review feedback in append-only `feedback.jsonl`, and finished chunk results in `chunks.jsonl`. A book is published atomically to `output/reviewed_books/` only after all its chunks finish. Rejected chunks keep the original source text; approved drops are removed with adjacent blank lines compacted. Re-running the same command skips completed chunks and books. If the source or chunk size changes, choose a fresh state directory.
+
+```bash
+.venv/bin/python rewrite_books.py --plan
+.venv/bin/python rewrite_books.py \
+  --input-dir cleaned_books --output-dir output/reviewed_books \
+  --api-base-url http://localhost:5000/v1 --model Qwen/Qwen3-4B-Instruct-2507 \
+  --max-chars 1800 --batch-size 16 --max-chunks 32
+```
+
+A capped run may stop partway through a book, in which case its Markdown file appears only after a later run finishes that book. Remove `--max-chunks` to process all remaining chunks. The model, reviewer, and rule agent default to the same model; `--review-model` and `--rule-model` can override them. `--visolex-checkpoint 'checkpoints/student model/final_model.pt'` enables optional spelling suggestions. Set `OPENAI_KEY` or `OPENAI_API_KEY` when the server requires a key. At the default chunk size, the current 233 books contain about 22,391 chunks, so run `--plan` and a small pilot before a full remote-API run.
+
+```bash
+.venv/bin/python kg_pipeline.py --input cleaned_books --prepare-only --limit 20 \
+  --output-dir output/books-reviewed-20 \
+  --text-agent-model Qwen/Qwen3-4B-Instruct-2507 \
+  --review-model Qwen/Qwen3-4B-Instruct-2507 \
+  --agent-rounds 3
+```
+
+Run a preparation audit without model calls:
+
+```bash
+python3 kg_pipeline.py --prepare-only --limit 100 --output-dir output/books-prep-100
+```
+
+For local ViSoLex inference, install `requirements-visolex.txt` in a project virtual environment. The checkpoint contains all model weights; the tokenizer files are needed separately. A local copy is stored under `checkpoints/bartpho-tokenizer/` for offline runs. Example audit:
+
+```bash
+uv venv .venv --python 3.10
+uv pip install --python .venv/bin/python -r requirements-visolex.txt
+.venv/bin/python kg_pipeline.py --prepare-only --limit 20 \
+  --visolex-checkpoint 'checkpoints/student model/final_model.pt' \
+  --output-dir output/books-visolex-20
+```
+
+Install `requirements-pipeline.txt` in the same virtual environment to run EDC and GraphJudge. Then run the complete pipeline against an OpenAI-compatible local server (the default model and URL match the Qwen settings in GraphJudge):
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-pipeline.txt
+.venv/bin/python kg_pipeline.py \
+  --limit 10 \
+  --output-dir output/books-pilot-10 \
+  --api-base-url http://localhost:5000/v1 \
+  --model Qwen/Qwen3-4B-Instruct-2507 \
+  --visolex-checkpoint 'checkpoints/student model/final_model.pt' \
+  --correction-model Qwen/Qwen3-4B-Instruct-2507 \
+  --python .venv/bin/python
+```
+
+`--limit` counts Markdown segments (or JSONL rows); use `--limit 0` for all books and a new output directory for each run. `--correction-model` is optional. To use a different verifier, pass `--judge-model`. Preparation without ViSoLex uses the Python standard library. The existing GraphJudge LoRA scripts and weights are not used by this Vietnamese verifier; their English prompts and hard-coded GPU/model paths are unsuitable as a default for these books.
+
+Outputs include `prepared.jsonl` (source ID, original/normalized/cleaned text, ViSoLex suggestions and status, correction status), `edc_input.txt`, EDC's stage files, `kg.jsonl` (every judgment), and `triples.jsonl` (accepted triples with source metadata). The pipeline refuses an existing output directory and checks EDC result alignment before verification.

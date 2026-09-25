@@ -8,6 +8,7 @@ from typing import List
 import gc
 import torch
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ def parse_relation_definition(raw_definitions: str):
 
 
 def is_model_openai(model_name):
-    return "gpt" in model_name
+    return model_name.startswith("api:") or "gpt" in model_name
 
 
 def generate_completion_transformers(
@@ -162,18 +163,24 @@ def generate_completion_transformers(
 
 
 def openai_chat_completion(model, system_prompt, history, temperature=0, max_tokens=512):
-    openai.api_key = os.environ["OPENAI_KEY"]
-    response = None
+    api_key = os.environ.get("OPENAI_KEY") or os.environ.get("OPENAI_API_KEY")
+    base_url = os.environ.get("EDC_OPENAI_BASE_URL")
+    if not api_key and not base_url:
+        raise ValueError("Set OPENAI_KEY/OPENAI_API_KEY or EDC_OPENAI_BASE_URL for the EDC API model")
+    client = openai.OpenAI(api_key=api_key or "local", base_url=base_url)
+    model_name = model.removeprefix("api:")
     if system_prompt is not None:
         messages = [{"role": "system", "content": system_prompt}] + history
     else:
         messages = history
-    while response is None:
+    for attempt in range(3):
         try:
-            response = openai.chat.completions.create(
-                model=model, messages=messages, temperature=temperature, max_tokens=max_tokens
+            response = client.chat.completions.create(
+                model=model_name, messages=messages, temperature=temperature, max_tokens=max_tokens
             )
-        except Exception as e:
-            time.sleep(5)
-    logging.debug(f"Model: {model}\nPrompt:\n {messages}\n Result: {response.choices[0].message.content}")
+            break
+        except (openai.APIConnectionError, openai.APITimeoutError, openai.RateLimitError, openai.InternalServerError):
+            if attempt == 2:
+                raise
+            time.sleep((2 ** attempt) + random.uniform(0, 0.25))
     return response.choices[0].message.content

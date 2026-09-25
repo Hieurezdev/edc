@@ -1,0 +1,4 @@
+Văn bản: Tháp Eiffel tọa lạc tại Paris và được thiết kế bởi Gustave Eiffel.
+Bộ ba: [["Tháp Eiffel", "tọa lạc tại", "Paris"], ["Tháp Eiffel", "được thiết kế bởi", "Gustave Eiffel"]]
+tọa lạc tại: Chủ thể nằm ở địa điểm được nêu bởi đối tượng.
+được thiết kế bởi: Chủ thể do người hoặc tổ chức được nêu bởi đối tượng thiết kế.

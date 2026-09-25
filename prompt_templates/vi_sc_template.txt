@@ -1,0 +1,9 @@
+Cho văn bản và một bộ ba. Hãy chọn quan hệ có cùng nghĩa với quan hệ gốc trong ngữ cảnh này. Chỉ trả lời một chữ cái của lựa chọn phù hợp; nếu không có lựa chọn phù hợp, chọn "None of the above".
+
+Văn bản: {input_text}
+Bộ ba: {query_triplet}
+Quan hệ "{query_relation}" có nghĩa: {query_relation_definition}
+
+Lựa chọn:
+{choices}
+Đáp án:

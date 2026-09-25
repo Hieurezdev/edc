@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 import edc.utils.llm_utils as llm_utils
 import re
-from edc.utils.e5_mistral_utils import MistralForSequenceEmbedding
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 import copy
@@ -152,7 +151,7 @@ class SchemaCanonicalizer:
 
         if canonicalized_triplet is None:
             # Cannot be canonicalized
-            if enrich:
+            if enrich and open_relation in open_relation_definition_dict:
                 self.schema_dict[open_relation] = open_relation_definition_dict[open_relation]
                 if "sts_query" in self.embedder.prompts:
                     embedding = self.embedder.encode(

@@ -4,7 +4,6 @@ from edc.schema_canonicalization import SchemaCanonicalizer
 from edc.entity_extraction import EntityExtractor
 import edc.utils.llm_utils as llm_utils
 from typing import List
-from edc.utils.e5_mistral_utils import MistralForSequenceEmbedding
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from edc.schema_retriever import SchemaRetriever
 from tqdm import tqdm
@@ -233,7 +232,7 @@ class EDC:
         
 
         if not llm_utils.is_model_openai(self.sc_llm_name):
-            sc_verify_model, sc_verify_tokenizer = self.load_model(self.sc_llm_name, "sts")
+            sc_verify_model, sc_verify_tokenizer = self.load_model(self.sc_llm_name, "hf")
             # if self.sc_llm_name not in self.loaded_model_dict:
             #     logger.info(f"Loading model {self.sc_llm_name}")
             #     sc_verify_model, sc_verify_tokenizer = (
@@ -267,7 +266,7 @@ class EDC:
             canon_candidate_dict_per_entry_list.append(canon_candidate_dict_list)
 
             logger.debug(f"{input_text}\n, {oie_triplets} ->\n {canonicalized_triplets}")
-            logger.debug(f"Retrieved candidate relations {canon_candidate_dict}")
+            logger.debug(f"Retrieved candidate relations {canon_candidate_dict_list}")
         logger.info("Schema Canonicalization finished.")
 
         if free_model:
