@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from clean_books import clean_books
 from edc.vietnamese_preprocess import clean_book_markdown, clean_vietnamese_text, correction_is_safe, split_text
 from edc.text_agent_pipeline import TextAgentWorkflow
-from edc.feedback_rules import derive_retry_rules, derive_rules
+from edc.feedback_rules import _parse_rules, derive_retry_rules, derive_rules
 from edc.text_generator import generate_candidate
 from edc.text_review import _parse_verdict, review_candidate
 from GraphJudge.graph_judger.verify_triples import parse_judgment
@@ -431,6 +431,7 @@ class VietnamesePipelineTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
         rules = derive_retry_rules(client, "rule-agent", source, candidate, checks, [])
         self.assertEqual(rules, ["Giữ thuật ngữ khí hiếm khi sửa OCR."])
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["response_format"]["type"], "json_schema")
         request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
         self.assertEqual(request["failed_checks"], [{"check": "terminology", "feedback": "Giữ thuật ngữ khí hiếm."}])
 
@@ -450,8 +451,28 @@ class VietnamesePipelineTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
         rules = derive_rules(client, "rule-agent", source, rejected, accepted, [])
         self.assertEqual([rule["category"] for rule in rules], ["terminology"])
+        format_spec = client.chat.completions.create.call_args.kwargs["response_format"]
+        self.assertEqual(format_spec["type"], "json_schema")
+        properties = format_spec["json_schema"]["schema"]["properties"]["rules"]["items"]["properties"]
+        self.assertEqual(properties["rule"]["maxLength"], 250)
+        self.assertEqual(properties["evidence"]["maxLength"], 250)
+        self.assertIn("pattern", properties["rule"])
+
         request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
         self.assertEqual(request["allowed_categories"], ["spelling", "terminology"])
+
+    def test_rule_validation_reports_safe_field_details(self):
+        for value in ("x" * 251, "Private\ncontent", " padded ", ""):
+            with self.subTest(value_length=len(value)):
+                response = json.dumps({"rules": [{
+                    "category": "semantics", "rule": "Giữ ngữ nghĩa.", "evidence": value,
+                }]})
+                with self.assertRaises(ValueError) as raised:
+                    _parse_rules(response, False, set(), {"semantics"})
+                self.assertIn("0.evidence", str(raised.exception))
+                self.assertIn(f"length={len(value)}", str(raised.exception))
+                self.assertNotIn("Private", str(raised.exception))
+        self.assertEqual(_parse_rules('{"rules": []}', False, set(), {"semantics"}), [])
 
     def test_rule_agent_does_not_learn_to_delete_accepted_answer(self):
         source = "2 + 2 = ? A. 3 B. 4"

@@ -16,6 +16,37 @@ if TYPE_CHECKING:
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt_templates" / "vi_feedback_rules.txt"
 _RETRY_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt_templates" / "vi_retry_rules.txt"
 _CATEGORIES = {"spelling", "terminology", "math", "answer", "removal", "semantics"}
+_RULE_TEXT_SCHEMA = {
+    "type": "string", "minLength": 1, "maxLength": 250,
+    "pattern": r"^\S(?:[^\r\n]*\S)?$",
+}
+_RULES_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "feedback_rules",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string", "enum": sorted(_CATEGORIES)},
+                            "rule": _RULE_TEXT_SCHEMA,
+                            "evidence": _RULE_TEXT_SCHEMA,
+                        },
+                        "required": ["category", "rule", "evidence"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["rules"],
+            "additionalProperties": False,
+        },
+    },
+}
 _ACTIONS = {"keep", "rewrite", "drop"}
 _MATH = re.compile(r"\$\$.*?\$\$|(?<!\$)\$(?!\$)[^$\n]*\$(?!\$)", re.DOTALL)
 _MATH_RULE = {
@@ -124,12 +155,14 @@ def _parse_rules(
         category, rule, evidence = item["category"], item["rule"], item["evidence"]
         if type(category) is not str or category not in _CATEGORIES or type(rule) is not str or type(evidence) is not str:
             raise ValueError(f"Feedback rule {index} has invalid field types or category")
-        if (
-            not rule.strip() or rule != rule.strip() or len(rule) > 250
-            or not evidence.strip() or evidence != evidence.strip() or len(evidence) > 250
-            or "\n" in rule or "\r" in rule or "\n" in evidence or "\r" in evidence
-        ):
-            raise ValueError(f"Feedback rule {index} must be short, nonempty, and single-line")
+        for field, value in (("rule", rule), ("evidence", evidence)):
+            if not value.strip() or value != value.strip() or len(value) > 250 or "\n" in value or "\r" in value:
+                raise ValueError(
+                    f"Feedback rule {index}.{field} must be 1-250 characters, trimmed, and single-line; "
+                    f"length={len(value)}, blank={not value.strip()}, "
+                    f"outer_whitespace={value != value.strip()}, multiline={chr(10) in value or chr(13) in value}. "
+                    "Verify that the inference server enforces the feedback_rules JSON schema."
+                )
         if category not in allowed_categories or _is_unsafe_rule(rule, accepted_answer_present):
             continue
         identity = (category, rule.casefold())
@@ -203,7 +236,7 @@ def derive_rules(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
-        response_format={"type": "json_object"},
+        response_format=_RULES_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
         raise ValueError("Feedback-rule agent returned no text response")
@@ -267,7 +300,7 @@ def derive_retry_rules(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
-        response_format={"type": "json_object"},
+        response_format=_RULES_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
         raise ValueError("Retry-rule agent returned no text response")

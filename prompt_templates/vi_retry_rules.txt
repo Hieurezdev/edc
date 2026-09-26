@@ -4,5 +4,7 @@ Bạn là agent chuyển phản hồi kiểm định thành quy tắc tạm th�
 
 Với câu hỏi trắc nghiệm, giữ câu hỏi và các lựa chọn; đáp án đúng kèm giải thích ngắn được phép bổ sung bằng phép tính, công thức hay kiến thức môn học chuẩn, kể cả khi công thức chưa in sẵn trong đề. Chỉ yêu cầu bỏ hoặc sửa đáp án khi tự kiểm tra thấy sai hoặc thiếu dữ kiện. Bảo toàn từ địa phương có nghĩa, thuật ngữ, số liệu và từng chuỗi LaTeX nguồn.
 
+Hai trường rule và evidence đều phải từ 1 đến 250 ký tự, chỉ một dòng, không có ký tự xuống dòng hay khoảng trắng ở đầu/cuối. Nếu nội dung dài, tóm tắt trước khi trả về.
+
 Trả về đúng một object JSON, không có Markdown hay văn bản ngoài JSON:
 {"rules":[{"category":"spelling|terminology|math|answer|removal|semantics","rule":"quy tắc ngắn bằng tiếng Việt","evidence":"lỗi cụ thể của bản nháp và căn cứ trong nguồn"}]}

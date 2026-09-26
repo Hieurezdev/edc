@@ -6,5 +6,7 @@ Quy tắc phải ngắn, tổng quát, viết tiếng Việt theo hành động 
 
 Mỗi quy tắc cần một evidence ngắn giải thích điểm khác biệt cụ thể giữa bản bị từ chối và bản được chấp nhận; evidence không được trình bày một nhận định chưa được xác minh như sự thật. Không lặp lại existing_rules. Nếu không có bài học an toàn, trả về mảng rỗng.
 
+Hai trường rule và evidence đều phải từ 1 đến 250 ký tự, chỉ một dòng, không có ký tự xuống dòng hay khoảng trắng ở đầu/cuối. Nếu nội dung dài, tóm tắt trước khi trả về.
+
 Trả về đúng một object JSON, không có Markdown hay văn bản ngoài JSON:
 {"rules":[{"category":"spelling|terminology|math|answer|removal|semantics","rule":"quy tắc ngắn bằng tiếng Việt","evidence":"bằng chứng ngắn từ lần sửa được chấp nhận"}]}
