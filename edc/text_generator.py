@@ -16,6 +16,25 @@ _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt_templates" / "vi
 _JSON_FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(.*?)\n```\s*\Z", re.IGNORECASE | re.DOTALL)
 _REQUIRED_KEYS = {"action", "text", "answer", "explanation", "reason"}
 _ACTIONS = {"keep", "rewrite", "drop"}
+_CANDIDATE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "text_candidate",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["keep", "rewrite", "drop"]},
+                "text": {"type": "string"},
+                "answer": {"type": ["string", "null"]},
+                "explanation": {"type": ["string", "null"], "maxLength": 300},
+                "reason": {"type": "string", "minLength": 1},
+            },
+            "required": ["action", "text", "answer", "explanation", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 @lru_cache(maxsize=1)
@@ -31,8 +50,16 @@ def _parse_candidate(content: str, source_text: str) -> dict[str, object]:
     except json.JSONDecodeError as exc:
         raise ValueError("Generator response is not valid JSON") from exc
 
-    if type(candidate) is not dict or set(candidate) != _REQUIRED_KEYS:
-        raise ValueError("Generator response must contain exactly action, text, answer, explanation, and reason")
+    if type(candidate) is not dict:
+        raise ValueError(f"Generator response must be an object, got {type(candidate).__name__}")
+    if set(candidate) != _REQUIRED_KEYS:
+        missing = sorted(_REQUIRED_KEYS - set(candidate))
+        unexpected_count = len(set(candidate) - _REQUIRED_KEYS)
+        raise ValueError(
+            "Generator response must contain exactly action, text, answer, explanation, and reason; "
+            f"missing fields: {missing}; unexpected field count: {unexpected_count}. "
+            "Verify that the inference server supports response_format=json_schema."
+        )
 
     action = candidate["action"]
     text = candidate["text"]
@@ -107,7 +134,7 @@ def generate_candidate(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
-        response_format={"type": "json_object"},
+        response_format=_CANDIDATE_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
         raise ValueError("Generator returned no text response")

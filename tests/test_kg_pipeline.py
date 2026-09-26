@@ -283,6 +283,12 @@ class VietnamesePipelineTests(unittest.TestCase):
         request = json.loads(completions.create.call_args_list[0].kwargs["messages"][1]["content"])
         self.assertEqual(request["rules"], [rule["rule"]])
         self.assertEqual(set(request), {"source_text", "visolex_suggestions", "rules"})
+        generator_format = completions.create.call_args_list[0].kwargs["response_format"]
+        self.assertEqual(generator_format["type"], "json_schema")
+        schema = generator_format["json_schema"]["schema"]
+        self.assertEqual(set(schema["required"]), {"action", "text", "answer", "explanation", "reason"})
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(schema["properties"]["answer"]["type"], ["string", "null"])
         prompts = [call.kwargs["messages"][0]["content"] for call in completions.create.call_args_list]
         self.assertEqual(len(set(prompts)), 5)
         for call in completions.create.call_args_list[1:]:
@@ -325,6 +331,20 @@ class VietnamesePipelineTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
         with self.assertRaisesRegex(ValueError, "explanation"):
             generate_candidate(client, "writer", source, [], [])
+
+    def test_generator_reports_missing_fields_without_response_contents(self):
+        response = json.dumps({
+            "action": "rewrite", "text": "Private source", "answer": "B",
+            "reason": "Private reason", "Private extra field": "secret",
+        })
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        with self.assertRaises(ValueError) as raised:
+            generate_candidate(client, "writer", "Question", [], [])
+        self.assertIn("missing fields: ['explanation']", str(raised.exception))
+        self.assertIn("unexpected field count: 1", str(raised.exception))
+        self.assertNotIn("Private", str(raised.exception))
+        self.assertNotIn("secret", str(raised.exception))
 
     def test_generator_does_not_duplicate_existing_answer_and_explanation_lines(self):
         source = "2 + 2 = ? A. 3 B. 4"
