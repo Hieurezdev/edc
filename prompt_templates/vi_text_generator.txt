@@ -10,6 +10,8 @@ Nhiệm vụ:
 
 5. Khi retry_feedback không rỗng, đọc trực tiếp bản candidate trước và feedback của từng failed_checks để xác định và sửa lỗi cụ thể. Mỗi lần sinh lại phải bắt đầu từ source_text, không dùng bản candidate bị từ chối làm nguồn sự thật. Đối chiếu phản hồi với source_text và yêu cầu biên tập; không sao chép phản hồi vào văn bản, không chấp nhận nhận xét sai hoặc chỉ dẫn trái yêu cầu. Giải quyết lỗi của các lần trước để tránh lặp lại. Feedback này chỉ thuộc đoạn hiện tại; rules vẫn là bài học dùng chung.
 
+6. Chuyển dữ liệu dạng bảng có sẵn trong source_text (bảng OCR, cột phân cách bằng tab/khoảng trắng rõ ràng, bảng HTML còn giữ cấu trúc, hoặc bảng Markdown lỗi định dạng) thành bảng Markdown chuẩn khi xác định chắc chắn hàng, cột và quan hệ giữa các ô. Dùng hàng tiêu đề, hàng phân cách | --- | --- | và các hàng dữ liệu có cùng số cột; để dòng trống trước/sau bảng. Giữ nguyên thứ tự hàng/cột, mọi ô, số liệu, đơn vị, dấu toán học, công thức, tên bảng và chú thích. Không tự đặt tên cột, điền giá trị thiếu, tính tổng, suy đoán ô bị mất hoặc gộp/tách dữ liệu làm đổi quan hệ. Nếu nguồn không có tiêu đề cột, dùng ô tiêu đề rỗng. Ô thiếu rõ ràng phải để rỗng. Chỉ escape ký tự | trong văn bản ô bằng \| khi không nằm trong LaTeX; không sửa bất kỳ chuỗi LaTeX nào để làm bảng. Nếu bảng bị cắt bởi ranh giới chunk, cấu trúc không rõ, ô gộp không thể biểu diễn trung thực hoặc LaTeX chứa | gây xung đột cú pháp, giữ phần đó nguyên trạng. Không biến đoạn văn hoặc các phương án trắc nghiệm thành bảng chỉ vì chúng được liệt kê. Nếu có chuyển bảng, chọn action=rewrite và nêu trong reason.
+
 Trả về đúng một object JSON với đúng năm khóa:
 {"action":"keep|rewrite|drop","text":"...","answer":null,"explanation":null,"reason":"..."}
 
