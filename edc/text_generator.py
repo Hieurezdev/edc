@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt_templates" / "vi_text_generator.txt"
+logger = logging.getLogger(__name__)
 _JSON_FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(.*?)\n```\s*\Z", re.IGNORECASE | re.DOTALL)
 _REQUIRED_KEYS = {"action", "text", "answer", "explanation", "reason"}
 _ACTIONS = {"keep", "rewrite", "drop"}
@@ -91,7 +93,10 @@ def _parse_candidate(content: str, source_text: str) -> dict[str, object]:
         raise ValueError("Generator explanation must be a short, nonempty single-line string")
 
     if action == "keep" and (text != source_text or answer is not None):
-        raise ValueError("A keep action must preserve the source verbatim and have no new answer")
+        # An edited proposal must undergo rewrite checks, never keep shortcuts.
+        action = "rewrite"
+        candidate["action"] = action
+        logger.warning("generator_action_corrected", extra={"details": {"reported_action": "keep", "effective_action": action}})
     if action == "drop" and (text != "" or answer is not None):
         raise ValueError("A drop action must have empty text and no answer")
     if action == "rewrite" and not text.strip():

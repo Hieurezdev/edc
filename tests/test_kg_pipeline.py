@@ -356,6 +356,25 @@ class VietnamesePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explanation"):
             generate_candidate(client, "writer", source, [], [])
 
+    def test_mislabeled_keep_is_reviewed_as_rewrite(self):
+        source = "Nguồn có thông tin."
+        proposed = "Nguồn có thông tin mới."
+        response = json.dumps({"action": "keep", "text": proposed, "answer": None, "explanation": None, "reason": "Giữ"})
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        for passed, status in ((True, "accepted"), (False, "review_rejected")):
+            with self.subTest(passed=passed), TemporaryDirectory() as directory:
+                workflow = TextAgentWorkflow(client, "writer", "checker", "rules", Path(directory) / "cheatsheet.json", 1)
+                with patch("edc.text_agent_pipeline.review_candidate", return_value=[{
+                    "check": "semantics", "passed": passed, "feedback": "" if passed else "Bổ sung dữ kiện",
+                }]) as review, self.assertLogs("edc.text_generator", level="WARNING") as logs:
+                    result = workflow.process("book::2", source, [])
+                self.assertEqual(result["status"], status)
+                self.assertEqual(review.call_args.args[3]["action"], "rewrite")
+                self.assertEqual(review.call_args.args[3]["text"], proposed)
+                self.assertEqual(result["history"][0]["candidate"]["action"], "rewrite")
+                self.assertEqual(logs.records[0].getMessage(), "generator_action_corrected")
+
     def test_generator_reports_truncation_before_json_parsing(self):
         completion = SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content='{"text": "Private unfinished'), finish_reason="length",
