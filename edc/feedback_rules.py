@@ -17,7 +17,7 @@ _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt_templates" / "vi
 _RETRY_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompt_templates" / "vi_retry_rules.txt"
 _CATEGORIES = {"spelling", "terminology", "math", "answer", "removal", "semantics"}
 _RULE_TEXT_SCHEMA = {
-    "type": "string", "minLength": 1, "maxLength": 250,
+    "type": "string", "minLength": 1,
     "pattern": r"^\S(?:[^\r\n]*\S)?$",
 }
 _RULES_FORMAT = {
@@ -158,9 +158,9 @@ def _parse_rules(
         # Evidence is audit data, not a writing instruction; preserve it verbatim.
         if not evidence.strip():
             raise ValueError(f"Feedback rule {index}.evidence must contain nonempty evidence; length={len(evidence)}")
-        if not rule.strip() or rule != rule.strip() or len(rule) > 250 or "\n" in rule or "\r" in rule:
+        if not rule.strip() or rule != rule.strip() or "\n" in rule or "\r" in rule:
             raise ValueError(
-                f"Feedback rule {index}.rule must be 1-250 characters, trimmed, and single-line; "
+                f"Feedback rule {index}.rule must be nonempty, trimmed, and single-line; "
                 f"length={len(rule)}, blank={not rule.strip()}, "
                 f"outer_whitespace={rule != rule.strip()}, multiline={chr(10) in rule or chr(13) in rule}. "
                 "Verify that the inference server enforces the feedback_rules JSON schema."

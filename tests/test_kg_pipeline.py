@@ -454,7 +454,7 @@ class VietnamesePipelineTests(unittest.TestCase):
         format_spec = client.chat.completions.create.call_args.kwargs["response_format"]
         self.assertEqual(format_spec["type"], "json_schema")
         properties = format_spec["json_schema"]["schema"]["properties"]["rules"]["items"]["properties"]
-        self.assertEqual(properties["rule"]["maxLength"], 250)
+        self.assertNotIn("maxLength", properties["rule"])
         self.assertNotIn("maxLength", properties["evidence"])
         self.assertIn("pattern", properties["rule"])
 
@@ -462,7 +462,7 @@ class VietnamesePipelineTests(unittest.TestCase):
         self.assertEqual(request["allowed_categories"], ["spelling", "terminology"])
 
     def test_rule_validation_reports_safe_field_details(self):
-        for value in ("x" * 251, "Private\ncontent", " padded ", ""):
+        for value in ("Private\ncontent", " padded ", ""):
             with self.subTest(value_length=len(value)):
                 response = json.dumps({"rules": [{
                     "category": "semantics", "rule": value, "evidence": "Bằng chứng.",
@@ -473,6 +473,15 @@ class VietnamesePipelineTests(unittest.TestCase):
                 self.assertIn(f"length={len(value)}", str(raised.exception))
                 self.assertNotIn("Private", str(raised.exception))
         self.assertEqual(_parse_rules('{"rules": []}', False, set(), {"semantics"}), [])
+
+    def test_rule_agent_preserves_long_rules_without_truncation(self):
+        rule = "Luôn đối chiếu bản sửa với văn bản nguồn và giữ đầy đủ điều kiện của câu hỏi. " * 7
+        rule = rule.strip()
+        self.assertGreater(len(rule), 476)
+        payload = {"rules": [{"category": "semantics", "rule": rule, "evidence": "Bản sửa đã giữ đúng dữ kiện."}]}
+        parsed = _parse_rules(json.dumps(payload, ensure_ascii=False), False, set(), {"semantics"})
+        self.assertEqual(parsed, payload["rules"])
+        self.assertEqual(_parse_rules(json.dumps(payload), False, {("semantics", rule.casefold())}, {"semantics"}), [])
 
     def test_rule_agent_preserves_long_evidence_in_persistent_cheatsheet(self):
         evidence = "Bằng chứng cần đối chiếu. " * 20 + "\nChi tiết tiếp theo."
