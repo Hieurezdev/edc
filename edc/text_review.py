@@ -18,6 +18,40 @@ _REVIEW_PROMPTS = {
     "removal": "vi_review_removal.txt",
 }
 _ACTIONS = {"keep", "rewrite", "drop"}
+_VERDICT_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "review_verdict",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "passed": {"type": "boolean"},
+                "feedback": {"type": "string"},
+            },
+            "required": ["passed", "feedback"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _parse_verdict(content: str, check: str) -> dict[str, object]:
+    try:
+        verdict = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{check} reviewer returned invalid JSON at character {exc.pos}") from exc
+    if not isinstance(verdict, dict):
+        raise ValueError(f"{check} reviewer must return an object, got {type(verdict).__name__}")
+    if type(verdict.get("passed")) is not bool or not isinstance(verdict.get("feedback"), str):
+        field_types = {key: type(value).__name__ for key, value in verdict.items()}
+        raise ValueError(
+            f"{check} reviewer requires passed:boolean and feedback:string; received {field_types}. "
+            "Verify that the inference server supports response_format=json_schema."
+        )
+    if not verdict["passed"] and not verdict["feedback"].strip():
+        raise ValueError(f"{check} reviewer rejected the candidate without explaining the failure")
+    return {"passed": verdict["passed"], "feedback": verdict["feedback"]}
 
 
 def review_candidate(
@@ -55,25 +89,14 @@ def review_candidate(
                 {"role": "user", "content": payload},
             ],
             temperature=0,
-            response_format={"type": "json_object"},
+            response_format=_VERDICT_FORMAT,
         )
         if not completion.choices:
             raise ValueError(f"{check} reviewer returned no choices")
         content = completion.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"{check} reviewer returned an empty response")
-        try:
-            verdict = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{check} reviewer returned invalid JSON") from exc
-        if (
-            not isinstance(verdict, dict)
-            or set(verdict) != {"passed", "feedback"}
-            or not isinstance(verdict["passed"], bool)
-            or not isinstance(verdict["feedback"], str)
-            or (not verdict["passed"] and not verdict["feedback"].strip())
-        ):
-            raise ValueError(f"{check} reviewer returned an invalid verdict schema")
+        verdict = _parse_verdict(content, check)
         results.append(
             {"check": check, "passed": verdict["passed"], "feedback": verdict["feedback"]}
         )

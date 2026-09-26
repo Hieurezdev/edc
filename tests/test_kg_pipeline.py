@@ -11,7 +11,7 @@ from edc.vietnamese_preprocess import clean_book_markdown, clean_vietnamese_text
 from edc.text_agent_pipeline import TextAgentWorkflow
 from edc.feedback_rules import derive_retry_rules, derive_rules
 from edc.text_generator import generate_candidate
-from edc.text_review import review_candidate
+from edc.text_review import _parse_verdict, review_candidate
 from GraphJudge.graph_judger.verify_triples import parse_judgment
 from kg_pipeline import markdown_records, prepare_corpus, verify_graph
 
@@ -285,6 +285,24 @@ class VietnamesePipelineTests(unittest.TestCase):
         self.assertEqual(set(request), {"source_text", "visolex_suggestions", "rules"})
         prompts = [call.kwargs["messages"][0]["content"] for call in completions.create.call_args_list]
         self.assertEqual(len(set(prompts)), 5)
+        for call in completions.create.call_args_list[1:]:
+            format_spec = call.kwargs["response_format"]
+            self.assertEqual(format_spec["type"], "json_schema")
+            self.assertEqual(format_spec["json_schema"]["schema"]["properties"]["passed"], {"type": "boolean"})
+
+    def test_review_verdict_ignores_unrelated_metadata(self):
+        self.assertEqual(
+            _parse_verdict('{"passed": false, "feedback": "Sai dữ kiện", "score": 0.2}', "semantics"),
+            {"passed": False, "feedback": "Sai dữ kiện"},
+        )
+
+    def test_review_verdict_does_not_coerce_string_boolean(self):
+        with self.assertRaisesRegex(ValueError, "passed:boolean"):
+            _parse_verdict('{"passed": "false", "feedback": "Sai"}', "semantics")
+        with self.assertRaisesRegex(ValueError, "feedback:string"):
+            _parse_verdict('{"passed": true, "feedback": null}', "semantics")
+        with self.assertRaisesRegex(ValueError, "without explaining"):
+            _parse_verdict('{"passed": false, "feedback": ""}', "semantics")
 
     def test_generator_places_supported_answer_and_short_explanation_on_separate_lines(self):
         source = "2 + 2 = ? A. 3 B. 4 C. 5 D. 6"
