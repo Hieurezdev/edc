@@ -11,7 +11,7 @@ import re
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from edc.feedback_rules import derive_retry_rules, derive_rules
-from edc.text_generator import generate_candidate
+from edc.text_generator import RetryFeedback, generate_candidate
 from edc.text_review import review_candidate
 from edc.visolex_model import ViSoLexSuggestion
 
@@ -109,11 +109,20 @@ class TextAgentWorkflow:
         for attempt in range(1, self.max_rounds + 1):
             context = {"record_id": record_id, "attempt": attempt}
             started = perf_counter()
-            logger.info("generation_started", extra={"details": context})
+            retry_feedback: list[RetryFeedback] = [
+                {
+                    "attempt": entry["attempt"],
+                    "candidate": entry["candidate"],
+                    "failed_checks": [check for check in entry["checks"] if not check["passed"]],
+                }
+                for entry in history if not entry["accepted"]
+            ]
+            logger.info("generation_started", extra={"details": {**context, "feedback_attempts": len(retry_feedback)}})
             confirmed_rules = [str(rule["rule"]) for rule in self.rules[-12:]]
             candidate = generate_candidate(
                 self.client, self.model, source_text,
                 visolex_suggestions, list(dict.fromkeys([*confirmed_rules, *retry_rules])),
+                retry_feedback=retry_feedback,
             )
             logger.info("generation_completed", extra={"details": {**context, "action": candidate["action"], "elapsed_seconds": round(perf_counter() - started, 3)}})
             checks = [*review_candidate(self.client, self.review_model, source_text, candidate)]

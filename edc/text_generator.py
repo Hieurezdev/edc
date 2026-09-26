@@ -6,7 +6,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -35,6 +35,12 @@ _CANDIDATE_FORMAT = {
         },
     },
 }
+
+
+class RetryFeedback(TypedDict):
+    attempt: int
+    candidate: dict[str, object]
+    failed_checks: list[dict[str, object]]
 
 
 @lru_cache(maxsize=1)
@@ -115,8 +121,9 @@ def generate_candidate(
     source_text: str,
     visolex_suggestions: list[dict[str, object]],
     rules: list[str],
+    retry_feedback: list[RetryFeedback] | None = None,
 ) -> dict[str, object]:
-    """Request one edit proposal using source text and applicable rules."""
+    """Request an edit using rules and rejected attempts from the current chunk."""
     if not model.strip():
         raise ValueError("A model name is required for text generation")
     if not source_text.strip():
@@ -126,6 +133,7 @@ def generate_candidate(
         "source_text": source_text,
         "visolex_suggestions": visolex_suggestions,
         "rules": rules,
+        "retry_feedback": retry_feedback if retry_feedback is not None else [],
     }
     completion = client.chat.completions.create(
         model=model,

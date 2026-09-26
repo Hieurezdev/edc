@@ -224,6 +224,12 @@ class VietnamesePipelineTests(unittest.TestCase):
             self.assertEqual(result["text"], source)
             self.assertEqual(generate.call_args_list[0].args[4], [])
             self.assertEqual(generate.call_args_list[1].args[4], ["Giữ nguyên công thức LaTeX."])
+            self.assertEqual(generate.call_args_list[0].kwargs["retry_feedback"], [])
+            feedback = generate.call_args_list[1].kwargs["retry_feedback"]
+            self.assertEqual(feedback[0]["attempt"], 1)
+            self.assertEqual(feedback[0]["candidate"], candidates[0])
+            self.assertEqual([check["check"] for check in feedback[0]["failed_checks"]], ["semantics", "protected_math"])
+            self.assertEqual(feedback[0]["failed_checks"][0]["feedback"], failed[0]["feedback"])
             self.assertEqual(retry.call_args.args[3], candidates[0])
             entries = json.loads(cheatsheet.read_text(encoding="utf-8"))["entries"]
             self.assertEqual([entry["accepted"] for entry in entries], [False, True])
@@ -238,6 +244,7 @@ class VietnamesePipelineTests(unittest.TestCase):
             ):
                 reloaded.process("book::2", source, [])
             self.assertEqual(regenerate.call_args.args[4], [rule["rule"]])
+            self.assertEqual(regenerate.call_args.kwargs["retry_feedback"], [])
 
     def test_text_agents_append_feedback_log_for_large_book_runs(self):
         with TemporaryDirectory() as directory:
@@ -277,12 +284,18 @@ class VietnamesePipelineTests(unittest.TestCase):
         ]
         client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         rule = {"category": "math", "rule": "Giữ nguyên LaTeX.", "evidence": "Một lỗi trước đó."}
-        candidate = generate_candidate(client, "writer", source, [], [rule["rule"]])
+        retry_feedback = [{
+            "attempt": 1,
+            "candidate": {"action": "rewrite", "text": "Sai", "answer": None, "explanation": None, "reason": "Sửa"},
+            "failed_checks": [{"check": "semantics", "passed": False, "feedback": "Giữ đúng dữ kiện nguồn"}],
+        }]
+        candidate = generate_candidate(client, "writer", source, [], [rule["rule"]], retry_feedback)
         checks = review_candidate(client, "checker", source, candidate)
         self.assertEqual([check["check"] for check in checks], ["semantics", "terminology", "solution", "removal"])
         request = json.loads(completions.create.call_args_list[0].kwargs["messages"][1]["content"])
         self.assertEqual(request["rules"], [rule["rule"]])
-        self.assertEqual(set(request), {"source_text", "visolex_suggestions", "rules"})
+        self.assertEqual(set(request), {"source_text", "visolex_suggestions", "rules", "retry_feedback"})
+        self.assertEqual(request["retry_feedback"], retry_feedback)
         generator_format = completions.create.call_args_list[0].kwargs["response_format"]
         self.assertEqual(generator_format["type"], "json_schema")
         schema = generator_format["json_schema"]["schema"]
