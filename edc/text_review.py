@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
+from time import perf_counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from openai import OpenAI
+
+
+logger = logging.getLogger(__name__)
 
 
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
@@ -81,6 +86,8 @@ def review_candidate(
     )
     results: list[dict[str, object]] = []
     for check, prompt_file in _REVIEW_PROMPTS.items():
+        started = perf_counter()
+        logger.info("reviewer_started", extra={"details": {"check": check, "model": model}})
         prompt = (_PROMPT_DIR / prompt_file).read_text(encoding="utf-8")
         completion = client.chat.completions.create(
             model=model,
@@ -97,6 +104,7 @@ def review_candidate(
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"{check} reviewer returned an empty response")
         verdict = _parse_verdict(content, check)
+        logger.info("reviewer_completed", extra={"details": {"check": check, "passed": verdict["passed"], "elapsed_seconds": round(perf_counter() - started, 3)}})
         results.append(
             {"check": check, "passed": verdict["passed"], "feedback": verdict["feedback"]}
         )

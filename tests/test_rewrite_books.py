@@ -1,14 +1,39 @@
 import io
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
-from rewrite_books import chunk_markdown, rewrite_books
+from rewrite_books import ProgressFormatter, chunk_markdown, rewrite_books
 
 
 class RewriteBooksTests(unittest.TestCase):
+    def test_failure_logs_chunk_context_and_propagates_without_source_text(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            source = "Private source paragraph."
+            (input_dir / "book.md").write_text(source, encoding="utf-8")
+            workflow = Mock()
+            failure = ValueError("Private model response")
+            workflow.process.side_effect = failure
+            with self.assertLogs("edc.books", level="INFO") as captured:
+                with self.assertRaises(ValueError) as raised:
+                    rewrite_books(input_dir, root / "output", root / "state", workflow, 100, 1, 0)
+            self.assertIs(raised.exception, failure)
+            event = json.loads(ProgressFormatter().format(captured.records[-1]))
+            self.assertEqual(event["event"], "chunk_failed")
+            self.assertEqual(event["chunk"], 1)
+            self.assertEqual(event["error_type"], "ValueError")
+            self.assertIn("record_id", event)
+            serialized = "\n".join(ProgressFormatter().format(record) for record in captured.records)
+            self.assertNotIn(source, serialized)
+            self.assertNotIn(str(failure), serialized)
+            self.assertEqual((root / "state/chunks.jsonl").read_text(), "")
+
     def test_chunking_preserves_original_text_and_latex_boundaries(self):
         formula = "$" + "x + " * 40 + "y$"
         source = "Mở đầu. " + formula + " Kết thúc.\n\nĐoạn tiếp theo " + "từ " * 50
