@@ -10,7 +10,7 @@ from clean_books import clean_books
 from edc.vietnamese_preprocess import clean_book_markdown, clean_vietnamese_text, correction_is_safe, split_text
 from edc.text_agent_pipeline import TextAgentWorkflow
 from edc.feedback_rules import _parse_rules, derive_retry_rules, derive_rules
-from edc.text_generator import generate_candidate
+from edc.text_generator import _parse_candidate, generate_candidate
 from edc.text_review import _parse_verdict, review_candidate
 from GraphJudge.graph_judger.verify_triples import parse_judgment
 from kg_pipeline import markdown_records, prepare_corpus, verify_graph
@@ -398,6 +398,17 @@ class VietnamesePipelineTests(unittest.TestCase):
         self.assertIn("unexpected field count: 1", str(raised.exception))
         self.assertNotIn("Private", str(raised.exception))
         self.assertNotIn("secret", str(raised.exception))
+
+    def test_generator_preserves_separate_answers_for_multiple_questions(self):
+        source = "Câu 1: 2 + 2? A. 4 B. 5\n\nCâu 2: 1 + 1? A. 1 B. 2"
+        first = "Câu 1: 2 + 2? A. 4 B. 5\nĐáp án: A\nGiải thích: 2 + 2 = 4."
+        body = first + "\n\nCâu 2: 1 + 1? A. 1 B. 2"
+        suffix = "\nĐáp án: B\nGiải thích: 1 + 1 = 2."
+        for text in (body, body + suffix, body + suffix + suffix):
+            candidate = _parse_candidate(json.dumps({
+                "action": "rewrite", "text": text, "answer": "B", "explanation": "1 + 1 = 2.", "reason": "Thêm đáp án",
+            }), source)
+            self.assertEqual(candidate["text"], body + suffix)
 
     def test_generator_does_not_duplicate_existing_answer_and_explanation_lines(self):
         source = "2 + 2 = ? A. 3 B. 4"

@@ -82,6 +82,33 @@ class RewriteBooksTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Source or chunking changed"):
                 rewrite_books(input_dir, output_dir, state_dir, Mock(), 100, 1, 0)
 
+    def test_repair_output_preserves_backup_and_reuses_checkpoint(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input"
+            source.mkdir()
+            (source / "book.md").write_text("Nguồn gáp.\n", encoding="utf-8")
+            workflow = Mock()
+            workflow.process.return_value = {"status": "accepted", "text": "Nguồn gấp.", "history": []}
+            output, state = root / "output", root / "state"
+            rewrite_books(source, output, state, workflow, 100, 1, 0)
+            destination = output / "book.md"
+            changed = b"Manually modified content\r\n"
+            destination.write_bytes(changed)
+            resumed = Mock()
+            with self.assertRaises(FileExistsError):
+                rewrite_books(source, output, state, resumed, 100, 1, 0)
+            self.assertEqual(destination.read_bytes(), changed)
+            with self.assertLogs("edc.books", level="WARNING"):
+                self.assertEqual(rewrite_books(source, output, state, resumed, 100, 1, 0, repair_output=True), (1, 0))
+            resumed.process.assert_not_called()
+            self.assertEqual(destination.read_text(), "Nguồn gấp.\n")
+            backups = list(output.glob("book.md.bak-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), changed)
+            self.assertEqual(rewrite_books(source, output, state, resumed, 100, 1, 0, repair_output=True), (1, 0))
+            self.assertEqual(len(list(output.glob("book.md.bak-*"))), 1)
+
     def test_dropped_chunk_closes_paragraph_gap(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

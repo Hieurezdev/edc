@@ -111,8 +111,11 @@ def _parse_candidate(content: str, source_text: str) -> dict[str, object]:
             if lines[-1].removeprefix("Đáp án:").strip().rstrip(".") != answer:
                 raise ValueError("Generator text has a conflicting answer")
             lines.pop()
-        if any(line.startswith(("Đáp án:", "Giải thích:")) for line in lines):
-            raise ValueError("Generator text has duplicate answer or explanation labels")
+        # Earlier questions may have their own answer blocks. Collapse only an
+        # identical adjacent suffix, leaving those question-answer relations intact.
+        expected_pair = [f"Đáp án: {answer}", f"Giải thích: {explanation}"]
+        while len(lines) >= 2 and lines[-2:] == expected_pair:
+            del lines[-2:]
         body = "\n".join(lines).rstrip()
         if not body:
             raise ValueError("Generator answer requires question text")

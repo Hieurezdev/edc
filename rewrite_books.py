@@ -9,8 +9,10 @@ import json
 import logging
 from pathlib import Path
 import re
+import shutil
 from time import perf_counter
 from typing import TypedDict
+from uuid import uuid4
 
 from edc.text_agent_pipeline import TextAgentWorkflow
 from edc.visolex_model import ViSoLexCorrector
@@ -179,6 +181,7 @@ def rewrite_books(
     batch_size: int,
     max_chunks: int,
     visolex: ViSoLexCorrector | None = None,
+    repair_output: bool = False,
 ) -> tuple[int, int]:
     """Process Markdown chunks, checkpoint each result, and publish complete books."""
     _validate_directories(input_dir, output_dir, state_dir)
@@ -259,13 +262,17 @@ def rewrite_books(
                 logger.info("batch_completed", extra={"details": {"book": relative_name, "first_chunk": batch_start + 1, "last_chunk": min(batch_start + batch_size, len(chunks)), "total_chunks": len(chunks)}})
 
             assembled = _assembled_text(source, chunks, [book_saved[index] for index in range(len(chunks))])
-            if destination.exists():
-                if destination.read_text(encoding="utf-8") != assembled:
-                    raise FileExistsError(f"Output differs from checkpoint: {destination}")
-            else:
+            differs = destination.exists() and destination.read_text(encoding="utf-8") != assembled
+            if differs and not repair_output:
+                raise FileExistsError(f"Output differs from checkpoint: {destination}; use --repair-output to back up and rebuild it")
+            if differs or not destination.exists():
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 temporary = destination.with_name(destination.name + ".tmp")
                 temporary.write_text(assembled, encoding="utf-8")
+                if differs:
+                    backup = destination.with_name(destination.name + ".bak-" + uuid4().hex)
+                    shutil.copy2(destination, backup)
+                    logger.warning("output_backed_up", extra={"details": {"book": relative_name, "backup": str(backup)}})
                 temporary.replace(destination)
             completed_books += 1
             logger.info("book_completed", extra={"details": {"book": relative_name, "completed_books": completed_books}})
@@ -277,6 +284,7 @@ def main() -> None:
     parser.add_argument("--input-dir", type=Path, default=ROOT / "cleaned_books")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "output/reviewed_books")
     parser.add_argument("--state-dir", type=Path)
+    parser.add_argument("--repair-output", action="store_true", help="Back up conflicting output files and rebuild from validated complete checkpoints")
     parser.add_argument("--max-chars", type=int, default=1800)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-chunks", type=int, default=0, help="New chunks to process in this run; 0 means all")
@@ -319,6 +327,7 @@ def main() -> None:
     books, chunks = rewrite_books(
         args.input_dir, args.output_dir, state_dir, workflow,
         args.max_chars, args.batch_size, args.max_chunks, visolex,
+        repair_output=args.repair_output,
     )
     logger.info("run_completed", extra={"details": {"books": books, "new_chunks": chunks, "output_dir": str(args.output_dir), "state_dir": str(state_dir), "elapsed_seconds": round(perf_counter() - started, 3)}})
 
