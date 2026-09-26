@@ -181,6 +181,7 @@ def derive_rules(
     rejected_attempts: list[dict[str, object]],
     accepted_candidate: dict[str, object],
     existing_rules: list[dict[str, object]],
+    enable_thinking: bool | None = None,
 ) -> list[dict[str, object]]:
     """Learn only general lessons supported by a rejected-to-accepted revision."""
     if not isinstance(model, str) or not model.strip():
@@ -238,6 +239,7 @@ def derive_rules(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
+        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking is not None else None,
         response_format=_RULES_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
@@ -255,6 +257,7 @@ def derive_retry_rules(
     rejected_candidate: dict[str, object],
     checks: list[dict[str, object]],
     existing_rules: list[dict[str, object]],
+    enable_thinking: bool | None = None,
 ) -> list[str]:
     """Convert current failed checks into provisional rules for one retry."""
     if not isinstance(model, str) or not model.strip():
@@ -302,6 +305,7 @@ def derive_retry_rules(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
+        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking is not None else None,
         response_format=_RULES_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):

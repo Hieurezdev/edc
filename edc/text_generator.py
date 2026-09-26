@@ -126,6 +126,7 @@ def generate_candidate(
     rules: list[str],
     retry_feedback: list[RetryFeedback] | None = None,
     max_tokens: int = 8192,
+    enable_thinking: bool | None = None,
 ) -> dict[str, object]:
     """Request an edit using rules and rejected attempts from the current chunk."""
     if not model.strip():
@@ -148,6 +149,7 @@ def generate_candidate(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
+        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking is not None else None,
         max_tokens=max_tokens,
         response_format=_CANDIDATE_FORMAT,
     )

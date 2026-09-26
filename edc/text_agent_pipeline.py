@@ -47,12 +47,14 @@ class TextAgentWorkflow:
         self, client: OpenAI, model: str, review_model: str, rule_model: str,
         cheatsheet_path: Path, max_rounds: int, entries_log_path: Path | None = None,
         generation_max_tokens: int = 8192,
+        enable_thinking: bool | None = None,
     ) -> None:
         if max_rounds < 1:
             raise ValueError("max_rounds must be at least 1")
         if generation_max_tokens < 1:
             raise ValueError("generation_max_tokens must be positive")
         self.generation_max_tokens = generation_max_tokens
+        self.enable_thinking = enable_thinking
         self.client = client
         self.model = model
         self.review_model = review_model
@@ -128,9 +130,10 @@ class TextAgentWorkflow:
                 visolex_suggestions, list(dict.fromkeys([*confirmed_rules, *retry_rules])),
                 retry_feedback=retry_feedback,
                 max_tokens=self.generation_max_tokens,
+                enable_thinking=self.enable_thinking,
             )
             logger.info("generation_completed", extra={"details": {**context, "action": candidate["action"], "elapsed_seconds": round(perf_counter() - started, 3)}})
-            checks = [*review_candidate(self.client, self.review_model, source_text, candidate)]
+            checks = [*review_candidate(self.client, self.review_model, source_text, candidate, enable_thinking=self.enable_thinking)]
             if candidate["action"] == "rewrite":
                 candidate_text = candidate["text"]
                 if not isinstance(candidate_text, str):
@@ -157,6 +160,7 @@ class TextAgentWorkflow:
                     new_rules = derive_rules(
                         self.client, self.rule_model, source_text,
                         history[:-1], candidate, self.rules,
+                        enable_thinking=self.enable_thinking,
                     )
                     logger.info("confirmed_rules_completed", extra={"details": {**context, "rules": len(new_rules)}})
                     existing = {(str(rule.get("category", "")), str(rule["rule"]).casefold().strip()) for rule in self.rules}
@@ -176,6 +180,7 @@ class TextAgentWorkflow:
                 logger.info("retry_rules_started", extra={"details": context})
                 new_retry_rules = derive_retry_rules(
                     self.client, self.rule_model, source_text, candidate, checks, self.rules,
+                    enable_thinking=self.enable_thinking,
                 )
                 logger.info("retry_rules_completed", extra={"details": {**context, "rules": len(new_retry_rules)}})
                 entry["retry_rules"] = new_retry_rules

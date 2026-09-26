@@ -218,9 +218,13 @@ class VietnamesePipelineTests(unittest.TestCase):
             ), patch("edc.text_agent_pipeline.derive_retry_rules", return_value=["Giữ nguyên công thức LaTeX."]) as retry, patch(
                 "edc.text_agent_pipeline.derive_rules", return_value=[rule]
             ) as derive:
-                workflow = TextAgentWorkflow(object(), "writer", "checker", "rule-agent", cheatsheet, 2)
+                workflow = TextAgentWorkflow(object(), "writer", "checker", "rule-agent", cheatsheet, 2, enable_thinking=False)
                 result = workflow.process("book::1", source, [])
             self.assertEqual(result["status"], "accepted")
+            for call in generate.call_args_list:
+                self.assertFalse(call.kwargs["enable_thinking"])
+            self.assertFalse(retry.call_args.kwargs["enable_thinking"])
+            self.assertFalse(derive.call_args.kwargs["enable_thinking"])
             self.assertEqual(result["text"], source)
             self.assertEqual(generate.call_args_list[0].args[4], [])
             self.assertEqual(generate.call_args_list[1].args[4], ["Giữ nguyên công thức LaTeX."])
@@ -289,8 +293,8 @@ class VietnamesePipelineTests(unittest.TestCase):
             "candidate": {"action": "rewrite", "text": "Sai", "answer": None, "explanation": None, "reason": "Sửa"},
             "failed_checks": [{"check": "semantics", "passed": False, "feedback": "Giữ đúng dữ kiện nguồn"}],
         }]
-        candidate = generate_candidate(client, "writer", source, [], [rule["rule"]], retry_feedback)
-        checks = review_candidate(client, "checker", source, candidate)
+        candidate = generate_candidate(client, "writer", source, [], [rule["rule"]], retry_feedback, enable_thinking=False)
+        checks = review_candidate(client, "checker", source, candidate, enable_thinking=False)
         self.assertEqual([check["check"] for check in checks], ["semantics", "terminology", "solution", "removal"])
         request = json.loads(completions.create.call_args_list[0].kwargs["messages"][1]["content"])
         self.assertEqual(request["rules"], [rule["rule"]])
@@ -302,6 +306,13 @@ class VietnamesePipelineTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), {"action", "text", "answer", "explanation", "reason"})
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["answer"]["type"], ["string", "null"])
+        for call in completions.create.call_args_list:
+            self.assertEqual(call.kwargs["extra_body"], {"chat_template_kwargs": {"enable_thinking": False}})
+        for call in completions.create.call_args_list[1:]:
+            review_payload = json.loads(call.kwargs["messages"][1]["content"])
+            self.assertEqual(review_payload["source_text"], source)
+            self.assertEqual(review_payload["candidate"]["text"], candidate["text"])
+            self.assertNotIn("reason", review_payload["candidate"])
         prompts = [call.kwargs["messages"][0]["content"] for call in completions.create.call_args_list]
         self.assertEqual(len(set(prompts)), 5)
         for call in completions.create.call_args_list[1:]:

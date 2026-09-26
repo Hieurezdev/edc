@@ -286,6 +286,7 @@ def main() -> None:
     parser.add_argument("--review-model")
     parser.add_argument("--rule-model")
     parser.add_argument("--agent-rounds", type=int, default=3)
+    parser.add_argument("--disable-thinking", action="store_true", help="Disable thinking for all agents via SGLang chat_template_kwargs")
     parser.add_argument("--generation-max-tokens", type=int, default=8192, help="Maximum output tokens per writer call")
     parser.add_argument("--visolex-checkpoint", type=Path)
     parser.add_argument("--visolex-tokenizer", default=str(ROOT / "checkpoints/bartpho-tokenizer"))
@@ -309,6 +310,7 @@ def main() -> None:
         state_dir / "cheatsheet.json", args.agent_rounds,
         entries_log_path=state_dir / "feedback.jsonl",
         generation_max_tokens=args.generation_max_tokens,
+        enable_thinking=False if args.disable_thinking else None,
     )
     visolex = (
         ViSoLexCorrector(args.visolex_checkpoint, args.visolex_tokenizer)

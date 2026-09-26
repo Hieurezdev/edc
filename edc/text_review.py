@@ -60,7 +60,8 @@ def _parse_verdict(content: str, check: str) -> dict[str, object]:
 
 
 def review_candidate(
-    client: OpenAI, model: str, source_text: str, candidate: dict[str, object]
+    client: OpenAI, model: str, source_text: str, candidate: dict[str, object],
+    enable_thinking: bool | None = None,
 ) -> list[dict[str, object]]:
     """Review one candidate through four separately prompted checks."""
     if not isinstance(source_text, str) or not source_text.strip():
@@ -81,8 +82,10 @@ def review_candidate(
     if not isinstance(candidate.get("reason"), str):
         raise ValueError("Review candidate.reason must be a string")
 
+    # Editorial rationale can persuade reviewers without providing source evidence.
+    review_fields = {key: candidate.get(key) for key in ("action", "text", "answer", "explanation")}
     payload = json.dumps(
-        {"source_text": source_text, "candidate": candidate}, ensure_ascii=False
+        {"source_text": source_text, "candidate": review_fields}, ensure_ascii=False
     )
     results: list[dict[str, object]] = []
     for check, prompt_file in _REVIEW_PROMPTS.items():
@@ -96,6 +99,7 @@ def review_candidate(
                 {"role": "user", "content": payload},
             ],
             temperature=0,
+        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking is not None else None,
             response_format=_VERDICT_FORMAT,
         )
         if not completion.choices:
