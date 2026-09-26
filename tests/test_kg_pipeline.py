@@ -455,7 +455,7 @@ class VietnamesePipelineTests(unittest.TestCase):
         self.assertEqual(format_spec["type"], "json_schema")
         properties = format_spec["json_schema"]["schema"]["properties"]["rules"]["items"]["properties"]
         self.assertEqual(properties["rule"]["maxLength"], 250)
-        self.assertEqual(properties["evidence"]["maxLength"], 250)
+        self.assertNotIn("maxLength", properties["evidence"])
         self.assertIn("pattern", properties["rule"])
 
         request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
@@ -465,14 +465,38 @@ class VietnamesePipelineTests(unittest.TestCase):
         for value in ("x" * 251, "Private\ncontent", " padded ", ""):
             with self.subTest(value_length=len(value)):
                 response = json.dumps({"rules": [{
-                    "category": "semantics", "rule": "Giữ ngữ nghĩa.", "evidence": value,
+                    "category": "semantics", "rule": value, "evidence": "Bằng chứng.",
                 }]})
                 with self.assertRaises(ValueError) as raised:
                     _parse_rules(response, False, set(), {"semantics"})
-                self.assertIn("0.evidence", str(raised.exception))
+                self.assertIn("0.rule", str(raised.exception))
                 self.assertIn(f"length={len(value)}", str(raised.exception))
                 self.assertNotIn("Private", str(raised.exception))
         self.assertEqual(_parse_rules('{"rules": []}', False, set(), {"semantics"}), [])
+
+    def test_rule_agent_preserves_long_evidence_in_persistent_cheatsheet(self):
+        evidence = "Bằng chứng cần đối chiếu. " * 20 + "\nChi tiết tiếp theo."
+        source = "khí hiểm Ne"
+        first = {"action": "rewrite", "text": "khí nguy hiểm Ne", "answer": None, "reason": "Sửa"}
+        accepted = {"action": "rewrite", "text": "khí hiếm Ne", "answer": None, "reason": "Sửa OCR"}
+        response = json.dumps({"rules": [{
+            "category": "terminology", "rule": "Giữ thuật ngữ khí hiếm.", "evidence": evidence,
+        }]}, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        failed = [{"check": "terminology", "passed": False, "feedback": "Giữ thuật ngữ"}]
+        passed = [{"check": "terminology", "passed": True, "feedback": ""}]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "cheatsheet.json"
+            workflow = TextAgentWorkflow(client, "writer", "checker", "rules", path, 2)
+            with patch("edc.text_agent_pipeline.generate_candidate", side_effect=[first, accepted]), patch(
+                "edc.text_agent_pipeline.review_candidate", side_effect=[failed, passed]
+            ), patch("edc.text_agent_pipeline.derive_retry_rules", return_value=[]):
+                result = workflow.process("book::19", source, [])
+            self.assertEqual(result["status"], "accepted")
+            self.assertEqual(json.loads(path.read_text())["rules"][0]["evidence"], evidence)
+        with self.assertRaisesRegex(ValueError, "nonempty evidence"):
+            _parse_rules(json.dumps({"rules": [{"category": "semantics", "rule": "Giữ nghĩa.", "evidence": " "}]}), False, set(), {"semantics"})
 
     def test_rule_agent_does_not_learn_to_delete_accepted_answer(self):
         source = "2 + 2 = ? A. 3 B. 4"

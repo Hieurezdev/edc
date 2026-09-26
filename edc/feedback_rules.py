@@ -35,7 +35,7 @@ _RULES_FORMAT = {
                         "properties": {
                             "category": {"type": "string", "enum": sorted(_CATEGORIES)},
                             "rule": _RULE_TEXT_SCHEMA,
-                            "evidence": _RULE_TEXT_SCHEMA,
+                            "evidence": {"type": "string", "minLength": 1},
                         },
                         "required": ["category", "rule", "evidence"],
                         "additionalProperties": False,
@@ -155,14 +155,16 @@ def _parse_rules(
         category, rule, evidence = item["category"], item["rule"], item["evidence"]
         if type(category) is not str or category not in _CATEGORIES or type(rule) is not str or type(evidence) is not str:
             raise ValueError(f"Feedback rule {index} has invalid field types or category")
-        for field, value in (("rule", rule), ("evidence", evidence)):
-            if not value.strip() or value != value.strip() or len(value) > 250 or "\n" in value or "\r" in value:
-                raise ValueError(
-                    f"Feedback rule {index}.{field} must be 1-250 characters, trimmed, and single-line; "
-                    f"length={len(value)}, blank={not value.strip()}, "
-                    f"outer_whitespace={value != value.strip()}, multiline={chr(10) in value or chr(13) in value}. "
-                    "Verify that the inference server enforces the feedback_rules JSON schema."
-                )
+        # Evidence is audit data, not a writing instruction; preserve it verbatim.
+        if not evidence.strip():
+            raise ValueError(f"Feedback rule {index}.evidence must contain nonempty evidence; length={len(evidence)}")
+        if not rule.strip() or rule != rule.strip() or len(rule) > 250 or "\n" in rule or "\r" in rule:
+            raise ValueError(
+                f"Feedback rule {index}.rule must be 1-250 characters, trimmed, and single-line; "
+                f"length={len(rule)}, blank={not rule.strip()}, "
+                f"outer_whitespace={rule != rule.strip()}, multiline={chr(10) in rule or chr(13) in rule}. "
+                "Verify that the inference server enforces the feedback_rules JSON schema."
+            )
         if category not in allowed_categories or _is_unsafe_rule(rule, accepted_answer_present):
             continue
         identity = (category, rule.casefold())
