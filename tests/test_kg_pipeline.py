@@ -345,6 +345,16 @@ class VietnamesePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explanation"):
             generate_candidate(client, "writer", source, [], [])
 
+    def test_generator_reports_truncation_before_json_parsing(self):
+        completion = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"text": "Private unfinished'), finish_reason="length",
+        )])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        with self.assertRaisesRegex(ValueError, "finish_reason=length") as raised:
+            generate_candidate(client, "writer", "Question", [], [], max_tokens=16384)
+        self.assertNotIn("Private", str(raised.exception))
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["max_tokens"], 16384)
+
     def test_generator_reports_missing_fields_without_response_contents(self):
         response = json.dumps({
             "action": "rewrite", "text": "Private source", "answer": "B",

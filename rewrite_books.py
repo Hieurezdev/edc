@@ -286,6 +286,7 @@ def main() -> None:
     parser.add_argument("--review-model")
     parser.add_argument("--rule-model")
     parser.add_argument("--agent-rounds", type=int, default=3)
+    parser.add_argument("--generation-max-tokens", type=int, default=8192, help="Maximum output tokens per writer call")
     parser.add_argument("--visolex-checkpoint", type=Path)
     parser.add_argument("--visolex-tokenizer", default=str(ROOT / "checkpoints/bartpho-tokenizer"))
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO")
@@ -307,6 +308,7 @@ def main() -> None:
         args.review_model or args.model, args.rule_model or args.model,
         state_dir / "cheatsheet.json", args.agent_rounds,
         entries_log_path=state_dir / "feedback.jsonl",
+        generation_max_tokens=args.generation_max_tokens,
     )
     visolex = (
         ViSoLexCorrector(args.visolex_checkpoint, args.visolex_tokenizer)

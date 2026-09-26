@@ -46,9 +46,13 @@ class TextAgentWorkflow:
     def __init__(
         self, client: OpenAI, model: str, review_model: str, rule_model: str,
         cheatsheet_path: Path, max_rounds: int, entries_log_path: Path | None = None,
+        generation_max_tokens: int = 8192,
     ) -> None:
         if max_rounds < 1:
             raise ValueError("max_rounds must be at least 1")
+        if generation_max_tokens < 1:
+            raise ValueError("generation_max_tokens must be positive")
+        self.generation_max_tokens = generation_max_tokens
         self.client = client
         self.model = model
         self.review_model = review_model
@@ -123,6 +127,7 @@ class TextAgentWorkflow:
                 self.client, self.model, source_text,
                 visolex_suggestions, list(dict.fromkeys([*confirmed_rules, *retry_rules])),
                 retry_feedback=retry_feedback,
+                max_tokens=self.generation_max_tokens,
             )
             logger.info("generation_completed", extra={"details": {**context, "action": candidate["action"], "elapsed_seconds": round(perf_counter() - started, 3)}})
             checks = [*review_candidate(self.client, self.review_model, source_text, candidate)]

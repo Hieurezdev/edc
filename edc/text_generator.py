@@ -54,7 +54,10 @@ def _parse_candidate(content: str, source_text: str) -> dict[str, object]:
     try:
         candidate = json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise ValueError("Generator response is not valid JSON") from exc
+        raise ValueError(
+            f"Generator response is not valid JSON at character {exc.pos}; "
+            f"response length={len(payload)}; decoder error={exc.msg}"
+        ) from exc
 
     if type(candidate) is not dict:
         raise ValueError(f"Generator response must be an object, got {type(candidate).__name__}")
@@ -122,12 +125,15 @@ def generate_candidate(
     visolex_suggestions: list[dict[str, object]],
     rules: list[str],
     retry_feedback: list[RetryFeedback] | None = None,
+    max_tokens: int = 8192,
 ) -> dict[str, object]:
     """Request an edit using rules and rejected attempts from the current chunk."""
     if not model.strip():
         raise ValueError("A model name is required for text generation")
     if not source_text.strip():
         raise ValueError("Source text must be nonempty for text generation")
+    if max_tokens < 1:
+        raise ValueError("Generator max_tokens must be positive")
 
     request = {
         "source_text": source_text,
@@ -142,8 +148,16 @@ def generate_candidate(
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ],
         temperature=0,
+        max_tokens=max_tokens,
         response_format=_CANDIDATE_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
         raise ValueError("Generator returned no text response")
+    finish_reason = getattr(completion.choices[0], "finish_reason", None)
+    if finish_reason == "length":
+        raise ValueError(
+            f"Generator response was truncated (finish_reason=length, max_tokens={max_tokens}). "
+            "Increase --generation-max-tokens or reduce chunk size using a fresh state directory. "
+            "Also check the inference server output and context limits."
+        )
     return _parse_candidate(completion.choices[0].message.content, source_text)
