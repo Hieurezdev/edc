@@ -375,6 +375,31 @@ class VietnamesePipelineTests(unittest.TestCase):
                 self.assertEqual(result["history"][0]["candidate"]["action"], "rewrite")
                 self.assertEqual(logs.records[0].getMessage(), "generator_action_corrected")
 
+    def test_unchanged_rewrite_becomes_keep_and_is_still_reviewed(self):
+        cases = [
+            ("Nguồn không có lỗi.", None, None),
+            ("2 + 2? A. 3 B. 4\nĐáp án: B\nGiải thích: 2 + 2 = 4.", "B", "2 + 2 = 4."),
+        ]
+        for source, answer, explanation in cases:
+            with self.subTest(answer=answer), TemporaryDirectory() as directory:
+                response = json.dumps({"action": "rewrite", "text": source, "answer": answer,
+                                       "explanation": explanation, "reason": "Đã kiểm tra"})
+                completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+                client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+                workflow = TextAgentWorkflow(client, "writer", "checker", "rules", Path(directory) / "cheatsheet.json", 1)
+                with patch("edc.text_agent_pipeline.review_candidate", return_value=[{
+                    "check": "semantics", "passed": True, "feedback": "",
+                }]) as review, self.assertLogs("edc.text_generator", level="WARNING") as logs:
+                    result = workflow.process("book::35", source, [])
+                self.assertEqual(result["status"], "accepted")
+                self.assertEqual(result["text"], source)
+                self.assertEqual(result["action"], "keep")
+                reviewed = review.call_args.args[3]
+                self.assertEqual(reviewed["action"], "keep")
+                self.assertIsNone(reviewed["answer"])
+                self.assertIsNone(reviewed["explanation"])
+                self.assertEqual(logs.records[0].details["effective_action"], "keep")
+
     def test_generator_reports_truncation_before_json_parsing(self):
         completion = SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content='{"text": "Private unfinished'), finish_reason="length",

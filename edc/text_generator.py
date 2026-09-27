@@ -121,7 +121,12 @@ def _parse_candidate(content: str, source_text: str) -> dict[str, object]:
             raise ValueError("Generator answer requires question text")
         candidate["text"] = body + f"\nĐáp án: {answer}\nGiải thích: {explanation}"
     if action == "rewrite" and candidate["text"] == source_text:
-        raise ValueError("A rewrite action must change the source text")
+        # Classify the final text after answer formatting; existing answer lines
+        # may already match the source and must not be reported as newly added.
+        candidate["action"] = "keep"
+        candidate["answer"] = None
+        candidate["explanation"] = None
+        logger.warning("generator_action_corrected", extra={"details": {"reported_action": "rewrite", "effective_action": "keep"}})
 
     return candidate
 
