@@ -14,7 +14,8 @@ from time import perf_counter
 from typing import TypedDict
 from uuid import uuid4
 
-from edc.text_agent_pipeline import TextAgentWorkflow
+from edc.text_agent_pipeline import TextAgentResult, TextAgentWorkflow
+from edc.text_generator import GeneratorTruncatedError
 from edc.visolex_model import ViSoLexCorrector
 from kg_pipeline import create_client
 
@@ -172,6 +173,38 @@ def _validate_directories(input_dir: Path, output_dir: Path, state_dir: Path) ->
         raise ValueError("Output and state directories must be separate")
 
 
+def _process_chunk(
+    workflow: TextAgentWorkflow, visolex: ViSoLexCorrector | None,
+    record_id: str, source: str,
+) -> TextAgentResult:
+    suggestions = visolex.suggest(source)[0] if visolex is not None else []
+    try:
+        return workflow.process(record_id, source, suggestions)
+    except GeneratorTruncatedError:
+        pieces = chunk_markdown(source, max(100, len(source) // 2))
+        if len(pieces) < 2:
+            raise
+        logger.warning("chunk_split_after_truncation", extra={"details": {"record_id": record_id, "parts": len(pieces), "source_chars": len(source)}})
+        records: list[SavedChunk] = []
+        history = []
+        for index, piece in enumerate(pieces, start=1):
+            part = _process_chunk(workflow, visolex, f"{record_id}::part_{index:03d}", source[piece.start:piece.end])
+            records.append({
+                "source_path": "", "source_sha256": "", "index": index,
+                "start": piece.start, "end": piece.end,
+                "status": part["status"], "text": part["text"],
+            })
+            history.extend(part["history"])
+        if all(record["status"] == "review_rejected" for record in records):
+            return {"text": "", "status": "review_rejected", "action": "none", "history": history}
+        if all(record["status"] == "dropped" for record in records):
+            return {"text": "", "status": "dropped", "action": "drop", "history": history}
+        return {
+            "text": _assembled_text(source, pieces, records),
+            "status": "accepted", "action": "rewrite", "history": history,
+        }
+
+
 def rewrite_books(
     input_dir: Path,
     output_dir: Path,
@@ -237,13 +270,12 @@ def rewrite_books(
                         return completed_books, processed_chunks
                     chunk = chunks[index]
                     chunk_text = source[chunk.start:chunk.end]
-                    suggestions = visolex.suggest(chunk_text)[0] if visolex is not None else []
                     record_id = f"book:{hashlib.sha256(relative_name.encode('utf-8')).hexdigest()[:16]}::chunk_{index + 1:06d}"
                     started = perf_counter()
                     context = {"book": relative_name, "chunk": index + 1, "total_chunks": len(chunks), "record_id": record_id}
                     logger.info("chunk_started", extra={"details": context})
                     try:
-                        result = workflow.process(record_id, chunk_text, suggestions)
+                        result = _process_chunk(workflow, visolex, record_id, chunk_text)
                     except Exception as exc:
                         # Response bodies and exception messages can contain private source text.
                         logger.error("chunk_failed", extra={"details": {**context, "error_type": type(exc).__name__, "elapsed_seconds": round(perf_counter() - started, 3)}})

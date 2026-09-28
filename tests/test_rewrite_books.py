@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
+from edc.text_generator import GeneratorTruncatedError
 from rewrite_books import ProgressFormatter, chunk_markdown, rewrite_books
 
 
@@ -81,6 +82,43 @@ class RewriteBooksTests(unittest.TestCase):
             source_path.write_text(source + "Đổi nguồn.", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Source or chunking changed"):
                 rewrite_books(input_dir, output_dir, state_dir, Mock(), 100, 1, 0)
+
+    def test_truncated_chunk_splits_and_checkpoints_one_combined_result(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "input"
+            source_dir.mkdir()
+            source = "Đoạn đầu gáp " + "a" * 150 + "\n\nĐoạn sau gáp " + "b" * 150 + "\n"
+            (source_dir / "book.md").write_text(source, encoding="utf-8")
+            workflow = Mock()
+            def process(record_id, text, suggestions):
+                if len(text) > 200:
+                    raise GeneratorTruncatedError("output budget exhausted")
+                return {"text": text.replace("gáp", "gấp"), "status": "accepted", "action": "rewrite", "history": []}
+            workflow.process.side_effect = process
+            with self.assertLogs("edc.books", level="WARNING") as captured:
+                self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", workflow, 1000, 1, 0), (1, 1))
+            self.assertTrue(any(record.getMessage() == "chunk_split_after_truncation" for record in captured.records))
+            self.assertGreater(workflow.process.call_count, 1)
+            self.assertEqual((root / "output/book.md").read_text(), source.replace("gáp", "gấp"))
+            checkpoints = (root / "state/chunks.jsonl").read_text().splitlines()
+            self.assertEqual(len(checkpoints), 1)
+            self.assertEqual(json.loads(checkpoints[0])["status"], "accepted")
+            resumed = Mock()
+            self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", resumed, 1000, 1, 0), (1, 0))
+            resumed.process.assert_not_called()
+
+    def test_unsplittable_truncated_chunk_still_fails_without_checkpoint(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "input"
+            source_dir.mkdir()
+            (source_dir / "book.md").write_text("x" * 300, encoding="utf-8")
+            workflow = Mock()
+            workflow.process.side_effect = GeneratorTruncatedError("output budget exhausted")
+            with self.assertRaises(GeneratorTruncatedError):
+                rewrite_books(source_dir, root / "output", root / "state", workflow, 1000, 1, 0)
+            self.assertEqual((root / "state/chunks.jsonl").read_text(), "")
 
     def test_repair_output_preserves_backup_and_reuses_checkpoint(self):
         with TemporaryDirectory() as directory:
