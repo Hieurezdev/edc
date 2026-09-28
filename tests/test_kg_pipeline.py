@@ -13,10 +13,20 @@ from edc.feedback_rules import _parse_rules, derive_retry_rules, derive_rules
 from edc.text_generator import _parse_candidate, generate_candidate
 from edc.text_review import _parse_verdict, review_candidate
 from GraphJudge.graph_judger.verify_triples import parse_judgment
-from kg_pipeline import markdown_records, prepare_corpus, verify_graph
+from kg_pipeline import create_client, markdown_records, prepare_corpus, verify_graph
 
 
 class VietnamesePipelineTests(unittest.TestCase):
+    def test_client_passes_configured_timeout_without_changing_other_callers(self):
+        with patch("openai.OpenAI") as openai_client:
+            create_client("http://localhost:8000/v1", timeout=1800)
+            self.assertEqual(openai_client.call_args.kwargs["timeout"], 1800)
+            create_client("http://localhost:8000/v1")
+            self.assertNotIn("timeout", openai_client.call_args.kwargs)
+            with self.assertRaisesRegex(ValueError, "timeout must be positive"):
+                create_client("http://localhost:8000/v1", timeout=0)
+            self.assertEqual(openai_client.call_count, 2)
+
     def test_book_cleanup_removes_image_markup_and_preserves_math(self):
         original = (
             "# Định lí\n![](images/a.png)\n"

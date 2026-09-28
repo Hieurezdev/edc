@@ -290,6 +290,7 @@ def main() -> None:
     parser.add_argument("--max-chunks", type=int, default=0, help="New chunks to process in this run; 0 means all")
     parser.add_argument("--plan", action="store_true", help="Count books and chunks without model calls or writes")
     parser.add_argument("--api-base-url", default="http://localhost:5000/v1")
+    parser.add_argument("--request-timeout", type=float, default=1800, help="Seconds to wait for each model request")
     parser.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--review-model")
     parser.add_argument("--rule-model")
@@ -313,7 +314,7 @@ def main() -> None:
     configure_logging(args.log_file or state_dir / "run.log", args.log_level)
     started = perf_counter()
     workflow = TextAgentWorkflow(
-        create_client(args.api_base_url), args.model,
+        create_client(args.api_base_url, timeout=args.request_timeout), args.model,
         args.review_model or args.model, args.rule_model or args.model,
         state_dir / "cheatsheet.json", args.agent_rounds,
         entries_log_path=state_dir / "feedback.jsonl",

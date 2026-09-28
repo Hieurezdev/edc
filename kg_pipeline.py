@@ -31,13 +31,17 @@ def write_json_line(file: TextIO, record: dict[str, object]) -> None:
     file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def create_client(base_url: str) -> OpenAI:
+def create_client(base_url: str, timeout: float | None = None) -> OpenAI:
     from openai import OpenAI
 
     api_key = os.environ.get("OPENAI_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key and not base_url:
         raise ValueError("An API key or an OpenAI-compatible base URL is required")
-    return OpenAI(api_key=api_key or "local", base_url=base_url)
+    if timeout is not None and timeout <= 0:
+        raise ValueError("API request timeout must be positive")
+    if timeout is None:
+        return OpenAI(api_key=api_key or "local", base_url=base_url)
+    return OpenAI(api_key=api_key or "local", base_url=base_url, timeout=timeout)
 
 
 def correct_text(
