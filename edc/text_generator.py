@@ -45,8 +45,8 @@ class RetryFeedback(TypedDict):
     failed_checks: list[dict[str, object]]
 
 
-class GeneratorTruncatedError(ValueError):
-    """The server exhausted its output budget before completing a proposal."""
+class OutputTruncatedError(ValueError):
+    """A model response ended before its structured output was complete."""
 
 
 @lru_cache(maxsize=1)
@@ -174,7 +174,7 @@ def generate_candidate(
         raise ValueError("Generator returned no text response")
     finish_reason = getattr(completion.choices[0], "finish_reason", None)
     if finish_reason == "length":
-        raise GeneratorTruncatedError(
+        raise OutputTruncatedError(
             f"Generator response was truncated (finish_reason=length, max_tokens={max_tokens}). "
             "Increase --generation-max-tokens or reduce chunk size using a fresh state directory. "
             "Also check the inference server output and context limits."

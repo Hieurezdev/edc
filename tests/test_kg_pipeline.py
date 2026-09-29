@@ -10,7 +10,7 @@ from clean_books import clean_books
 from edc.vietnamese_preprocess import clean_book_markdown, clean_vietnamese_text, correction_is_safe, split_text
 from edc.text_agent_pipeline import TextAgentWorkflow
 from edc.feedback_rules import _parse_rules, derive_retry_rules, derive_rules
-from edc.text_generator import _parse_candidate, generate_candidate
+from edc.text_generator import OutputTruncatedError, _parse_candidate, generate_candidate
 from edc.text_review import _parse_verdict, review_candidate
 from GraphJudge.graph_judger.verify_triples import parse_judgment
 from kg_pipeline import create_client, markdown_records, prepare_corpus, verify_graph
@@ -329,6 +329,22 @@ class VietnamesePipelineTests(unittest.TestCase):
             format_spec = call.kwargs["response_format"]
             self.assertEqual(format_spec["type"], "json_schema")
             self.assertEqual(format_spec["json_schema"]["schema"]["properties"]["passed"], {"type": "boolean"})
+
+    def test_reviewer_incomplete_json_requests_safe_chunk_split(self):
+        with self.assertRaisesRegex(OutputTruncatedError, "semantics reviewer returned incomplete JSON"):
+            _parse_verdict('{"passed": false, "feedback": "Chưa rõ', "semantics")
+        with self.assertRaisesRegex(ValueError, "invalid JSON"):
+            _parse_verdict('{"passed":, "feedback": "Sai"}', "semantics")
+
+        completion = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"passed": true, "feedback": ""}'),
+            finish_reason="length",
+        )])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        candidate = {"action": "keep", "text": "Nguồn", "answer": None, "explanation": None, "reason": "Giữ"}
+        with self.assertRaisesRegex(OutputTruncatedError, "finish_reason=length"):
+            review_candidate(client, "checker", "Nguồn", candidate)
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["max_tokens"], 2048)
 
     def test_review_verdict_ignores_unrelated_metadata(self):
         self.assertEqual(

@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
-from edc.text_generator import GeneratorTruncatedError
+from edc.text_generator import OutputTruncatedError
 from rewrite_books import ProgressFormatter, chunk_markdown, rewrite_books
 
 
@@ -93,7 +93,7 @@ class RewriteBooksTests(unittest.TestCase):
             workflow = Mock()
             def process(record_id, text, suggestions):
                 if len(text) > 200:
-                    raise GeneratorTruncatedError("output budget exhausted")
+                    raise OutputTruncatedError("output budget exhausted")
                 return {"text": text.replace("gáp", "gấp"), "status": "accepted", "action": "rewrite", "history": []}
             workflow.process.side_effect = process
             with self.assertLogs("edc.books", level="WARNING") as captured:
@@ -115,8 +115,8 @@ class RewriteBooksTests(unittest.TestCase):
             source_dir.mkdir()
             (source_dir / "book.md").write_text("x" * 300, encoding="utf-8")
             workflow = Mock()
-            workflow.process.side_effect = GeneratorTruncatedError("output budget exhausted")
-            with self.assertRaises(GeneratorTruncatedError):
+            workflow.process.side_effect = OutputTruncatedError("output budget exhausted")
+            with self.assertRaises(OutputTruncatedError):
                 rewrite_books(source_dir, root / "output", root / "state", workflow, 1000, 1, 0)
             self.assertEqual((root / "state/chunks.jsonl").read_text(), "")
 

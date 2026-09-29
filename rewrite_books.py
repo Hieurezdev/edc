@@ -15,7 +15,7 @@ from typing import TypedDict
 from uuid import uuid4
 
 from edc.text_agent_pipeline import TextAgentResult, TextAgentWorkflow
-from edc.text_generator import GeneratorTruncatedError
+from edc.text_generator import OutputTruncatedError
 from edc.visolex_model import ViSoLexCorrector
 from kg_pipeline import create_client
 
@@ -180,7 +180,7 @@ def _process_chunk(
     suggestions = visolex.suggest(source)[0] if visolex is not None else []
     try:
         return workflow.process(record_id, source, suggestions)
-    except GeneratorTruncatedError:
+    except OutputTruncatedError:
         pieces = chunk_markdown(source, max(100, len(source) // 2))
         if len(pieces) < 2:
             raise

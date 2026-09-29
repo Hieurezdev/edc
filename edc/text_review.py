@@ -8,6 +8,8 @@ from time import perf_counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from edc.text_generator import OutputTruncatedError
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -45,6 +47,11 @@ def _parse_verdict(content: str, check: str) -> dict[str, object]:
     try:
         verdict = json.loads(content)
     except json.JSONDecodeError as exc:
+        if exc.msg.startswith("Unterminated string") or exc.pos >= len(content.rstrip()) - 1:
+            raise OutputTruncatedError(
+                f"{check} reviewer returned incomplete JSON at character {exc.pos}; "
+                "the chunk can be retried in smaller parts"
+            ) from exc
         raise ValueError(f"{check} reviewer returned invalid JSON at character {exc.pos}") from exc
     if not isinstance(verdict, dict):
         raise ValueError(f"{check} reviewer must return an object, got {type(verdict).__name__}")
@@ -99,11 +106,14 @@ def review_candidate(
                 {"role": "user", "content": payload},
             ],
             temperature=0,
-        extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking is not None else None,
+            max_tokens=2048,
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking is not None else None,
             response_format=_VERDICT_FORMAT,
         )
         if not completion.choices:
             raise ValueError(f"{check} reviewer returned no choices")
+        if getattr(completion.choices[0], "finish_reason", None) == "length":
+            raise OutputTruncatedError(f"{check} reviewer response was truncated (finish_reason=length)")
         content = completion.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"{check} reviewer returned an empty response")
