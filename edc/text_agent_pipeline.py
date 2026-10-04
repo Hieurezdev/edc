@@ -37,7 +37,7 @@ class FeedbackEntry(TypedDict):
 
 class TextAgentResult(TypedDict):
     text: str
-    status: Literal["accepted", "dropped", "review_rejected"]
+    status: Literal["accepted", "dropped", "review_rejected", "model_failed"]
     action: str
     history: list[FeedbackEntry]
 

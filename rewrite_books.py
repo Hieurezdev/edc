@@ -47,6 +47,7 @@ def configure_logging(log_path: Path, level: str) -> None:
 
 
 ROOT = Path(__file__).resolve().parent
+_MAX_ADAPTIVE_SPLIT_DEPTH = 3
 _PARAGRAPH_GAP = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)*")
 _WHITESPACE = re.compile(r"\s+")
 _MATH = re.compile(r"\$\$.*?\$\$|(?<!\$)\$(?!\$)[^$\n]*\$(?!\$)", re.DOTALL)
@@ -131,12 +132,15 @@ def _read_saved(path: Path) -> dict[tuple[str, int], SavedChunk]:
                 or type(item.get("index")) is not int
                 or type(item.get("start")) is not int
                 or type(item.get("end")) is not int
-                or item.get("status") not in {"accepted", "dropped", "review_rejected"}
+                or item.get("status") not in {"accepted", "dropped", "review_rejected", "model_failed"}
                 or not isinstance(item.get("text"), str)
             ):
                 raise ValueError(f"Invalid checkpoint record at {path}:{line_number}")
             key = item["source_path"], item["index"]
-            if key in saved:
+            if key in saved and (
+                saved[key]["status"] != "model_failed"
+                or any(saved[key][field] != item[field] for field in ("source_sha256", "start", "end"))
+            ):
                 raise ValueError(f"Duplicate checkpoint chunk {key} at {path}:{line_number}")
             saved[key] = item
     return saved
@@ -148,7 +152,7 @@ def _assembled_text(source: str, chunks: list[Chunk], records: list[SavedChunk])
     dropped = False
     for chunk, record in zip(chunks, records):
         parts.append(source[cursor:chunk.start])
-        parts.append(source[chunk.start:chunk.end] if record["status"] == "review_rejected" else record["text"])
+        parts.append(source[chunk.start:chunk.end] if record["status"] in {"review_rejected", "model_failed"} else record["text"])
         dropped |= record["status"] == "dropped"
         cursor = chunk.end
     parts.append(source[cursor:])
@@ -175,20 +179,23 @@ def _validate_directories(input_dir: Path, output_dir: Path, state_dir: Path) ->
 
 def _process_chunk(
     workflow: TextAgentWorkflow, visolex: ViSoLexCorrector | None,
-    record_id: str, source: str,
+    record_id: str, source: str, depth: int = 0,
 ) -> TextAgentResult:
     suggestions = visolex.suggest(source)[0] if visolex is not None else []
     try:
         return workflow.process(record_id, source, suggestions)
     except OutputTruncatedError:
-        pieces = chunk_markdown(source, max(100, len(source) // 2))
+        pieces = chunk_markdown(source, max(100, len(source) // 2)) if depth < _MAX_ADAPTIVE_SPLIT_DEPTH else []
         if len(pieces) < 2:
-            raise
+            logger.error("chunk_kept_original_after_truncation", extra={"details": {"record_id": record_id, "source_chars": len(source), "split_depth": depth}})
+            return {"text": "", "status": "model_failed", "action": "none", "history": []}
         logger.warning("chunk_split_after_truncation", extra={"details": {"record_id": record_id, "parts": len(pieces), "source_chars": len(source)}})
         records: list[SavedChunk] = []
         history = []
         for index, piece in enumerate(pieces, start=1):
-            part = _process_chunk(workflow, visolex, f"{record_id}::part_{index:03d}", source[piece.start:piece.end])
+            part = _process_chunk(workflow, visolex, f"{record_id}::part_{index:03d}", source[piece.start:piece.end], depth + 1)
+            if part["status"] == "model_failed":
+                return {"text": "", "status": "model_failed", "action": "none", "history": [*history, *part["history"]]}
             records.append({
                 "source_path": "", "source_sha256": "", "index": index,
                 "start": piece.start, "end": piece.end,
@@ -215,6 +222,7 @@ def rewrite_books(
     max_chunks: int,
     visolex: ViSoLexCorrector | None = None,
     repair_output: bool = False,
+    retry_model_failed: bool = False,
 ) -> tuple[int, int]:
     """Process Markdown chunks, checkpoint each result, and publish complete books."""
     _validate_directories(input_dir, output_dir, state_dir)
@@ -262,7 +270,7 @@ def rewrite_books(
 
             for batch_start in range(0, len(chunks), batch_size):
                 for index in range(batch_start, min(batch_start + batch_size, len(chunks))):
-                    if index in book_saved:
+                    if index in book_saved and not (retry_model_failed and book_saved[index]["status"] == "model_failed"):
                         logger.debug("chunk_resumed", extra={"details": {"book": relative_name, "chunk": index + 1}})
                         continue
                     if max_chunks and processed_chunks >= max_chunks:
@@ -295,7 +303,7 @@ def rewrite_books(
 
             assembled = _assembled_text(source, chunks, [book_saved[index] for index in range(len(chunks))])
             differs = destination.exists() and destination.read_text(encoding="utf-8") != assembled
-            if differs and not repair_output:
+            if differs and not (repair_output or retry_model_failed):
                 raise FileExistsError(f"Output differs from checkpoint: {destination}; use --repair-output to back up and rebuild it")
             if differs or not destination.exists():
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -317,6 +325,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "output/reviewed_books")
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--repair-output", action="store_true", help="Back up conflicting output files and rebuild from validated complete checkpoints")
+    parser.add_argument("--retry-model-failed", action="store_true", help="Reprocess chunks kept from source after repeated model truncation")
     parser.add_argument("--max-chars", type=int, default=1800)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-chunks", type=int, default=0, help="New chunks to process in this run; 0 means all")
@@ -360,7 +369,7 @@ def main() -> None:
     books, chunks = rewrite_books(
         args.input_dir, args.output_dir, state_dir, workflow,
         args.max_chars, args.batch_size, args.max_chunks, visolex,
-        repair_output=args.repair_output,
+        repair_output=args.repair_output, retry_model_failed=args.retry_model_failed,
     )
     logger.info("run_completed", extra={"details": {"books": books, "new_chunks": chunks, "output_dir": str(args.output_dir), "state_dir": str(state_dir), "elapsed_seconds": round(perf_counter() - started, 3)}})
 

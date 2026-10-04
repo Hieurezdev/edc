@@ -108,17 +108,47 @@ class RewriteBooksTests(unittest.TestCase):
             self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", resumed, 1000, 1, 0), (1, 0))
             resumed.process.assert_not_called()
 
-    def test_unsplittable_truncated_chunk_still_fails_without_checkpoint(self):
+    def test_unsplittable_truncation_keeps_source_and_can_be_reprocessed(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             source_dir = root / "input"
             source_dir.mkdir()
-            (source_dir / "book.md").write_text("x" * 300, encoding="utf-8")
+            source = "x" * 300
+            (source_dir / "book.md").write_text(source, encoding="utf-8")
             workflow = Mock()
             workflow.process.side_effect = OutputTruncatedError("output budget exhausted")
-            with self.assertRaises(OutputTruncatedError):
-                rewrite_books(source_dir, root / "output", root / "state", workflow, 1000, 1, 0)
-            self.assertEqual((root / "state/chunks.jsonl").read_text(), "")
+            with self.assertLogs("edc.books", level="ERROR"):
+                self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", workflow, 1000, 1, 0), (1, 1))
+            destination = root / "output/book.md"
+            self.assertEqual(destination.read_text(), source)
+            checkpoint = root / "state/chunks.jsonl"
+            self.assertEqual(json.loads(checkpoint.read_text().splitlines()[0])["status"], "model_failed")
+            resumed = Mock()
+            self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", resumed, 1000, 1, 0), (1, 0))
+            resumed.process.assert_not_called()
+            resumed.process.return_value = {"text": "Đã sửa.", "status": "accepted", "action": "rewrite", "history": []}
+            self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", resumed, 1000, 1, 0, retry_model_failed=True), (1, 1))
+            self.assertEqual(destination.read_text(), "Đã sửa.")
+            self.assertEqual([json.loads(line)["status"] for line in checkpoint.read_text().splitlines()], ["model_failed", "accepted"])
+            backups = list((root / "output").glob("book.md.bak-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(), source)
+            self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", Mock(), 1000, 1, 0), (1, 0))
+
+    def test_repeated_truncation_stops_after_bounded_splits(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "input"
+            source_dir.mkdir()
+            source = "Một đoạn văn có nghĩa. " * 50
+            (source_dir / "book.md").write_text(source, encoding="utf-8")
+            workflow = Mock()
+            workflow.process.side_effect = OutputTruncatedError("output budget exhausted")
+            with self.assertLogs("edc.books", level="ERROR"):
+                self.assertEqual(rewrite_books(source_dir, root / "output", root / "state", workflow, 2000, 1, 0), (1, 1))
+            self.assertLessEqual(workflow.process.call_count, 4)
+            self.assertEqual((root / "output/book.md").read_text(), source)
+            self.assertEqual(json.loads((root / "state/chunks.jsonl").read_text())["status"], "model_failed")
 
     def test_repair_output_preserves_backup_and_reuses_checkpoint(self):
         with TemporaryDirectory() as directory:
