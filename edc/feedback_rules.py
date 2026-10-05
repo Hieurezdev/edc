@@ -61,6 +61,7 @@ _CATEGORIES_BY_CHECK = {
     "solution": {"answer"},
     "removal": {"removal"},
 }
+_PROMPT_RULE_CHARS = 4000
 _ANSWER_REMOVAL = re.compile(
     r"(?:\b(?:xóa|xoá|bỏ|loại|gỡ)\b.{0,24}\bđáp\s*án\b|"
     r"\bđáp\s*án\b.{0,24}\b(?:xóa|xoá|bỏ|loại|gỡ)\b)",
@@ -135,6 +136,24 @@ def _is_unsafe_rule(rule: str, accepted_answer_present: bool) -> bool:
                 if not _NEGATION.search(rule[max(0, verb.start() - 14):verb.start()]):
                     return True
     return False
+
+
+def _rules_for_prompt(
+    existing_rules: list[dict[str, object]], allowed_categories: set[str],
+) -> list[dict[str, str]]:
+    """Keep recent relevant rule text within a bounded prompt budget."""
+    selected: list[dict[str, str]] = []
+    remaining = _PROMPT_RULE_CHARS
+    for item in reversed(existing_rules):
+        category = str(item["category"])
+        if category not in allowed_categories:
+            continue
+        rule = str(item["rule"])
+        size = len(category) + len(rule) + 32
+        if size <= remaining:
+            selected.append({"category": category, "rule": rule})
+            remaining -= size
+    return list(reversed(selected))
 
 
 def _parse_rules(
@@ -229,7 +248,7 @@ def derive_rules(
         "source_text": source_text,
         "rejected_attempts": useful,
         "accepted_candidate": accepted_candidate,
-        "existing_rules": existing_rules,
+        "existing_rules": _rules_for_prompt(existing_rules, allowed_categories),
         "allowed_categories": sorted(allowed_categories),
     }
     completion = client.chat.completions.create(
@@ -296,7 +315,7 @@ def derive_retry_rules(
         "rejected_candidate": rejected_candidate,
         "failed_checks": failed_checks,
         "allowed_categories": sorted(allowed_categories),
-        "existing_rules": existing_rules,
+        "existing_rules": _rules_for_prompt(existing_rules, allowed_categories),
     }
     completion = client.chat.completions.create(
         model=model,

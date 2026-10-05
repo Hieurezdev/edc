@@ -537,6 +537,34 @@ class VietnamesePipelineTests(unittest.TestCase):
         request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
         self.assertEqual(request["failed_checks"], [{"check": "terminology", "feedback": "Giữ thuật ngữ khí hiếm."}])
 
+    def test_rule_agent_limits_prompt_history_but_deduplicates_all_saved_rules(self):
+        source = "Văn bản nguồn."
+        candidate = {"action": "rewrite", "text": "Văn bản mới.", "answer": None}
+        checks = [{"check": "semantics", "passed": False, "feedback": "Giữ đúng nghĩa nguồn."}]
+        existing = [{
+            "category": "semantics", "rule": (f"Giữ ý nghĩa theo ngữ cảnh {index}: " + "từ " * 55).strip(),
+            "evidence": "Riêng tư " * 500,
+        } for index in range(100)]
+        response = json.dumps({"rules": [{
+            "category": "semantics", "rule": existing[0]["rule"], "evidence": "Nhận xét trùng.",
+        }]}, ensure_ascii=False)
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=response))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
+        self.assertEqual(derive_retry_rules(client, "rules", source, candidate, checks, existing), [])
+        retry_request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        prompt_rules = retry_request["existing_rules"]
+        self.assertLess(len(json.dumps(prompt_rules, ensure_ascii=False)), 4500)
+        self.assertLess(len(prompt_rules), len(existing))
+        self.assertEqual(prompt_rules[-1]["rule"], existing[-1]["rule"])
+        self.assertNotIn("evidence", prompt_rules[-1])
+        self.assertNotIn(existing[0]["rule"], [rule["rule"] for rule in prompt_rules])
+
+        rejected = [{"accepted": False, "candidate": candidate, "checks": checks}]
+        accepted = {"action": "keep", "text": source, "answer": None}
+        self.assertEqual(derive_rules(client, "rules", source, rejected, accepted, existing), [])
+        confirmed_request = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual(confirmed_request["existing_rules"], prompt_rules)
+
     def test_rule_agent_discards_categories_not_in_failed_checks(self):
         source = "khí hiểm Ne"
         rejected = [{
