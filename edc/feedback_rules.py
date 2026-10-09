@@ -62,6 +62,10 @@ _CATEGORIES_BY_CHECK = {
     "removal": {"removal"},
 }
 _PROMPT_RULE_CHARS = 4000
+
+
+class RuleOutputError(ValueError):
+    """The rule model returned an unusable structured response."""
 _ANSWER_REMOVAL = re.compile(
     r"(?:\b(?:xóa|xoá|bỏ|loại|gỡ)\b.{0,24}\bđáp\s*án\b|"
     r"\bđáp\s*án\b.{0,24}\b(?:xóa|xoá|bỏ|loại|gỡ)\b)",
@@ -163,22 +167,22 @@ def _parse_rules(
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ValueError("Feedback-rule agent returned invalid JSON") from exc
+        raise RuleOutputError(f"Feedback-rule agent returned invalid JSON at character {exc.pos}") from exc
     if type(payload) is not dict or set(payload) != {"rules"} or type(payload["rules"]) is not list:
-        raise ValueError("Feedback-rule agent must return an object containing only a rules array")
+        raise RuleOutputError("Feedback-rule agent must return an object containing only a rules array")
     rules: list[dict[str, object]] = []
     seen = set(existing)
     for index, item in enumerate(payload["rules"]):
         if type(item) is not dict or set(item) != {"category", "rule", "evidence"}:
-            raise ValueError(f"Feedback rule {index} must contain exactly category, rule, evidence")
+            raise RuleOutputError(f"Feedback rule {index} must contain exactly category, rule, evidence")
         category, rule, evidence = item["category"], item["rule"], item["evidence"]
         if type(category) is not str or category not in _CATEGORIES or type(rule) is not str or type(evidence) is not str:
-            raise ValueError(f"Feedback rule {index} has invalid field types or category")
+            raise RuleOutputError(f"Feedback rule {index} has invalid field types or category")
         # Evidence is audit data, not a writing instruction; preserve it verbatim.
         if not evidence.strip():
-            raise ValueError(f"Feedback rule {index}.evidence must contain nonempty evidence; length={len(evidence)}")
+            raise RuleOutputError(f"Feedback rule {index}.evidence must contain nonempty evidence; length={len(evidence)}")
         if not rule.strip() or rule != rule.strip() or "\n" in rule or "\r" in rule:
-            raise ValueError(
+            raise RuleOutputError(
                 f"Feedback rule {index}.rule must be nonempty, trimmed, and single-line; "
                 f"length={len(rule)}, blank={not rule.strip()}, "
                 f"outer_whitespace={rule != rule.strip()}, multiline={chr(10) in rule or chr(13) in rule}. "
@@ -262,7 +266,9 @@ def derive_rules(
         response_format=_RULES_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
-        raise ValueError("Feedback-rule agent returned no text response")
+        raise RuleOutputError("Feedback-rule agent returned no text response")
+    if getattr(completion.choices[0], "finish_reason", None) == "length":
+        raise RuleOutputError("Feedback-rule agent response was truncated (finish_reason=length)")
     answer_present = accepted_fields[2] is not None or bool(_ANSWER_LABEL.search(accepted_fields[1]))
     return confirmed_rules + _parse_rules(
         completion.choices[0].message.content, answer_present, existing, allowed_categories,
@@ -328,7 +334,9 @@ def derive_retry_rules(
         response_format=_RULES_FORMAT,
     )
     if not completion.choices or not isinstance(completion.choices[0].message.content, str):
-        raise ValueError("Retry-rule agent returned no text response")
+        raise RuleOutputError("Retry-rule agent returned no text response")
+    if getattr(completion.choices[0], "finish_reason", None) == "length":
+        raise RuleOutputError("Retry-rule agent response was truncated (finish_reason=length)")
     answer_present = answer is not None or bool(_ANSWER_LABEL.search(candidate_text))
     learned = _parse_rules(
         completion.choices[0].message.content, answer_present, existing, allowed_categories,

@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Literal, TypedDict
 
-from edc.feedback_rules import derive_retry_rules, derive_rules
+from edc.feedback_rules import RuleOutputError, derive_retry_rules, derive_rules
 from edc.text_generator import RetryFeedback, generate_candidate
 from edc.text_review import review_candidate
 from edc.visolex_model import ViSoLexSuggestion
@@ -157,11 +157,15 @@ class TextAgentWorkflow:
                 self._save_entries()
                 if len(history) > 1:
                     logger.info("confirmed_rules_started", extra={"details": context})
-                    new_rules = derive_rules(
-                        self.client, self.rule_model, source_text,
-                        history[:-1], candidate, self.rules,
-                        enable_thinking=self.enable_thinking,
-                    )
+                    try:
+                        new_rules = derive_rules(
+                            self.client, self.rule_model, source_text,
+                            history[:-1], candidate, self.rules,
+                            enable_thinking=self.enable_thinking,
+                        )
+                    except RuleOutputError as exc:
+                        logger.warning("confirmed_rules_unavailable", extra={"details": {**context, "error_type": type(exc).__name__}})
+                        new_rules = []
                     logger.info("confirmed_rules_completed", extra={"details": {**context, "rules": len(new_rules)}})
                     existing = {(str(rule.get("category", "")), str(rule["rule"]).casefold().strip()) for rule in self.rules}
                     for rule in new_rules:
@@ -178,10 +182,14 @@ class TextAgentWorkflow:
                 }
             if attempt < self.max_rounds:
                 logger.info("retry_rules_started", extra={"details": context})
-                new_retry_rules = derive_retry_rules(
-                    self.client, self.rule_model, source_text, candidate, checks, self.rules,
-                    enable_thinking=self.enable_thinking,
-                )
+                try:
+                    new_retry_rules = derive_retry_rules(
+                        self.client, self.rule_model, source_text, candidate, checks, self.rules,
+                        enable_thinking=self.enable_thinking,
+                    )
+                except RuleOutputError as exc:
+                    logger.warning("retry_rules_unavailable", extra={"details": {**context, "error_type": type(exc).__name__}})
+                    new_retry_rules = []
                 logger.info("retry_rules_completed", extra={"details": {**context, "rules": len(new_retry_rules)}})
                 entry["retry_rules"] = new_retry_rules
                 retry_rules = list(dict.fromkeys([*retry_rules, *new_retry_rules]))

@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from clean_books import clean_books
 from edc.vietnamese_preprocess import clean_book_markdown, clean_vietnamese_text, correction_is_safe, split_text
 from edc.text_agent_pipeline import TextAgentWorkflow
-from edc.feedback_rules import _parse_rules, derive_retry_rules, derive_rules
+from edc.feedback_rules import RuleOutputError, _parse_rules, derive_retry_rules, derive_rules
 from edc.text_generator import OutputTruncatedError, _parse_candidate, generate_candidate
 from edc.text_review import _parse_verdict, review_candidate
 from GraphJudge.graph_judger.verify_triples import parse_judgment
@@ -484,6 +484,34 @@ class VietnamesePipelineTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=Mock(create=Mock(return_value=completion))))
         candidate = generate_candidate(client, "writer", source, [], [])
         self.assertEqual(candidate["text"], source + "\nĐáp án: B\nGiải thích: Vì 2 + 2 = 4.")
+
+    def test_invalid_retry_rules_do_not_block_writer_feedback_retry(self):
+        source = "Văn bản gáp."
+        bad = {"action": "rewrite", "text": "Văn bản sai.", "answer": None, "explanation": None, "reason": "Sửa"}
+        good = {"action": "rewrite", "text": "Văn bản gấp.", "answer": None, "explanation": None, "reason": "Sửa OCR"}
+        failed = [{"check": "semantics", "passed": False, "feedback": "Giữ đúng nội dung nguồn."}]
+        passed = [{"check": "semantics", "passed": True, "feedback": ""}]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "cheatsheet.json"
+            workflow = TextAgentWorkflow(object(), "writer", "checker", "rules", path, 2)
+            with patch("edc.text_agent_pipeline.generate_candidate", side_effect=[bad, good]) as writer, patch(
+                "edc.text_agent_pipeline.review_candidate", side_effect=[failed, passed]
+            ), patch("edc.text_agent_pipeline.derive_retry_rules", side_effect=RuleOutputError("malformed")), patch(
+                "edc.text_agent_pipeline.derive_rules", side_effect=RuleOutputError("malformed")
+            ), self.assertLogs("edc.text_agent_pipeline", level="WARNING") as captured:
+                result = workflow.process("book::1", source, [])
+            self.assertEqual(result["status"], "accepted")
+            self.assertEqual(result["text"], good["text"])
+            self.assertEqual(writer.call_args_list[1].kwargs["retry_feedback"][0]["failed_checks"], failed)
+            self.assertEqual(writer.call_args_list[1].args[4], [])
+            self.assertEqual(json.loads(path.read_text())["rules"], [])
+            self.assertEqual([entry["accepted"] for entry in result["history"]], [False, True])
+            self.assertEqual([record.getMessage() for record in captured.records], ["retry_rules_unavailable", "confirmed_rules_unavailable"])
+
+    def test_invalid_rule_json_is_classified_without_logging_content(self):
+        with self.assertRaises(RuleOutputError) as raised:
+            _parse_rules('{"rules": ["private unfinished', False, set(), {"semantics"})
+        self.assertNotIn("private", str(raised.exception))
 
     def test_rule_agent_keeps_only_rules_about_confirmed_feedback(self):
         source = "Có công thức $x^2$."
